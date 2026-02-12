@@ -1,6 +1,7 @@
 use crate::ffi;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use chrono::{Datelike, Local, Timelike};
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
@@ -58,6 +59,8 @@ pub struct ConversationItem {
     preview: QString,
     conversation_id: String,
     me_participant_id: String,
+    last_message_timestamp: i64,
+    last_message_time: QString,
 }
 
 pub struct ConversationListRust {
@@ -350,6 +353,7 @@ impl crate::ffi::ConversationList {
         match role {
             0 => QVariant::from(&item.name),
             1 => QVariant::from(&item.preview),
+            2 => QVariant::from(&item.last_message_time),
             _ => QVariant::default(),
         }
     }
@@ -358,6 +362,7 @@ impl crate::ffi::ConversationList {
         let mut roles = QHash_i32_QByteArray::default();
         roles.insert(0, "name".into());
         roles.insert(1, "preview".into());
+        roles.insert(2, "time".into());
         roles
     }
 
@@ -427,14 +432,14 @@ impl crate::ffi::ConversationList {
 
                 task.abort();
 
-                let items = response
+                let mut items: Vec<ConversationItem> = response
                     .conversations
                     .into_iter()
-                    .map(|convo| ConversationItem {
-                        name: QString::from(convo.name),
-                        preview: QString::from(""),
-                        conversation_id: convo.conversation_id,
-                        me_participant_id: convo
+                    .map(|convo| {
+                        let preview = QString::from(build_preview(&convo));
+                        let name = QString::from(convo.name);
+                        let conversation_id = convo.conversation_id;
+                        let me_participant_id = convo
                             .participants
                             .iter()
                             .find_map(|participant| {
@@ -447,9 +452,22 @@ impl crate::ffi::ConversationList {
                                     None
                                 }
                             })
-                            .unwrap_or_default(),
+                            .unwrap_or_default();
+                        let last_message_timestamp = convo.last_message_timestamp;
+                        let last_message_time = QString::from(format_human_timestamp(last_message_timestamp));
+
+                        ConversationItem {
+                            name,
+                            preview,
+                            conversation_id,
+                            me_participant_id,
+                            last_message_timestamp,
+                            last_message_time,
+                        }
                     })
                     .collect();
+
+                items.sort_by(|left, right| right.last_message_timestamp.cmp(&left.last_message_timestamp));
 
                 Ok(items)
             });
@@ -516,6 +534,87 @@ fn filter_items(items: &[ConversationItem], filter_text: &str) -> Vec<Conversati
         })
         .cloned()
         .collect()
+}
+
+fn format_human_timestamp(timestamp: i64) -> String {
+    if timestamp <= 0 {
+        return String::new();
+    }
+
+    let timestamp_millis = if timestamp >= 1_000_000_000_000_000 {
+        timestamp / 1000
+    } else if timestamp < 1_000_000_000_000 {
+        timestamp.saturating_mul(1000)
+    } else {
+        timestamp
+    };
+
+    let utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_millis);
+    let Some(utc_time) = utc else {
+        return String::new();
+    };
+    let time = utc_time.with_timezone(&Local);
+
+    let now = Local::now();
+    let delta = now.signed_duration_since(time);
+    let delta_secs = delta.num_seconds();
+
+    if delta_secs < 60 {
+        return "Now".to_string();
+    }
+
+    if delta_secs < 3600 {
+        let minutes = (delta_secs / 60).max(1);
+        return format!("{minutes}m ago");
+    }
+
+    let same_day = now.date_naive() == time.date_naive();
+    if same_day {
+        return format!("{:02}:{:02}", time.hour(), time.minute());
+    }
+
+    if now.year() == time.year() {
+        let day = time.day();
+        let month = match time.month() {
+            1 => "Jan",
+            2 => "Feb",
+            3 => "Mar",
+            4 => "Apr",
+            5 => "May",
+            6 => "Jun",
+            7 => "Jul",
+            8 => "Aug",
+            9 => "Sep",
+            10 => "Oct",
+            11 => "Nov",
+            _ => "Dec",
+        };
+        return format!("{day} {month}");
+    }
+
+    let year = (time.year() % 100).abs();
+    format!("{}/{:02}/{:02}", time.day(), time.month(), year)
+}
+
+fn build_preview(convo: &libgmessages_rs::proto::conversations::Conversation) -> String {
+    let Some(latest) = convo.latest_message.as_ref() else {
+        return String::new();
+    };
+
+    let mut prefix = String::new();
+    if latest.from_me != 0 {
+        prefix.push_str("You: ");
+    } else if convo.is_group_chat && !latest.display_name.is_empty() {
+        prefix.push_str(&latest.display_name);
+        prefix.push_str(": ");
+    }
+
+    let mut snippet = latest.display_content.trim().to_string();
+    if snippet.is_empty() {
+        snippet = "Attachment".to_string();
+    }
+
+    format!("{prefix}{snippet}")
 }
 
 pub struct MessageItem {

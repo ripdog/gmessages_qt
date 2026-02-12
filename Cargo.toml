@@ -12,6 +12,7 @@ cxx-qt-lib = { version= "0.8.0", features = ["qt_full"] }
 cxx-qt-lib-extras = "0.8.0"
 libgmessages-rs = { path = "../libgmessages-rs" }
 base64 = "0.22"
+chrono = "0.4"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 

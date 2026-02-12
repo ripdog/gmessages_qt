@@ -138,10 +138,18 @@ Kirigami.ApplicationWindow {
                                             anchors.margins: Kirigami.Units.smallSpacing
                                             spacing: Kirigami.Units.smallSpacing
 
-                                            Controls.Label {
-                                                text: name
-                                                font.bold: true
+                                            RowLayout {
                                                 Layout.fillWidth: true
+
+                                                Controls.Label {
+                                                    text: name
+                                                    font.bold: true
+                                                    Layout.fillWidth: true
+                                                }
+                                                Controls.Label {
+                                                    text: time
+                                                    color: Kirigami.Theme.disabledTextColor
+                                                }
                                             }
                                             Controls.Label {
                                                 text: preview
