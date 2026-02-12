@@ -24,6 +24,7 @@ Kirigami.ApplicationWindow {
 
             readonly property AppState appState: AppState {}
             readonly property SessionController sessionController: SessionController {}
+            readonly property ConversationList conversationList: ConversationList {}
 
             Component.onCompleted: {
                 appState.initialize()
@@ -87,45 +88,74 @@ Kirigami.ApplicationWindow {
                             Controls.TextField {
                                 placeholderText: "Search"
                                 Layout.fillWidth: true
+                                onTextChanged: conversationList.apply_filter(text)
                             }
 
-                            ListView {
-                                id: contactsList
+                            Controls.ScrollView {
+                                id: contactsScroll
 
-                                model: ListModel {
-                                    ListElement { name: "Alice"; preview: "Typing..." }
-                                    ListElement { name: "Brandon"; preview: "See you soon" }
-                                    ListElement { name: "Casey"; preview: "Thanks!" }
-                                    ListElement { name: "Drew"; preview: "On my way" }
-                                    ListElement { name: "Evelyn"; preview: "Got it" }
-                                }
-                                clip: true
                                 Layout.fillWidth: true
                                 Layout.fillHeight: true
+                                clip: true
 
-                                delegate: Rectangle {
-                                    width: ListView.view.width
-                                    height: Kirigami.Units.gridUnit * 3
-                                    color: Qt.rgba(0, 0, 0, 0)
 
-                                    ColumnLayout {
-                                        anchors.fill: parent
-                                        anchors.margins: Kirigami.Units.smallSpacing
-                                        spacing: Kirigami.Units.smallSpacing
 
-                                        Controls.Label {
-                                            text: name
-                                            font.bold: true
-                                            Layout.fillWidth: true
-                                        }
-                                        Controls.Label {
-                                            text: preview
-                                            color: Kirigami.Theme.disabledTextColor
-                                            elide: Text.ElideRight
-                                            Layout.fillWidth: true
+                                contentItem: ListView {
+                                    id: contactsList
+
+                                    model: conversationList
+                                    clip: true
+                                    boundsBehavior: Flickable.StopAtBounds
+                                    maximumFlickVelocity: 9000
+                                    flickDeceleration: 4000
+
+                                    delegate: Rectangle {
+                                        width: ListView.view.width
+                                        height: Kirigami.Units.gridUnit * 3
+                                        color: Qt.rgba(0, 0, 0, 0)
+
+                                        ColumnLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: Kirigami.Units.smallSpacing
+                                            spacing: Kirigami.Units.smallSpacing
+
+                                            Controls.Label {
+                                                text: name
+                                                font.bold: true
+                                                Layout.fillWidth: true
+                                            }
+                                            Controls.Label {
+                                                text: preview
+                                                color: Kirigami.Theme.disabledTextColor
+                                                elide: Text.ElideRight
+                                                Layout.fillWidth: true
+                                            }
                                         }
                                     }
                                 }
+                                Controls.ScrollBar.vertical: Controls.ScrollBar {
+                                    policy: Controls.ScrollBar.AsNeeded
+                                    anchors.top: contactsList.top
+                                    anchors.bottom: contactsList.bottom
+                                    anchors.left: contactsList.right
+                                }
+                            }
+
+                            Item {
+                                anchors.fill: parent
+                                visible: conversationList.loading
+
+                                Controls.BusyIndicator {
+                                    anchors.centerIn: parent
+                                    running: true
+                                }
+                            }
+
+                            Controls.Label {
+                                anchors.centerIn: parent
+                                text: "No conversations"
+                                color: Kirigami.Theme.disabledTextColor
+                                visible: !conversationList.loading && contactsList.count === 0
                             }
                         }
                     }
@@ -284,6 +314,7 @@ Kirigami.ApplicationWindow {
                     }
                     if (appState.logged_in && !sessionController.running) {
                         sessionController.start()
+                        conversationList.load()
                     }
                 }
             }
