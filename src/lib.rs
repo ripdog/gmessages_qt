@@ -3,6 +3,7 @@ mod app_state;
 use core::pin::Pin;
 
 pub use app_state::AppStateRust;
+pub use app_state::SessionControllerRust;
 
 #[cxx_qt::bridge]
 mod ffi {
@@ -26,4 +27,20 @@ mod ffi {
     }
 
     impl cxx_qt::Threading for AppState {}
+
+    extern "RustQt" {
+        #[qobject]
+        #[qml_element]
+        #[qproperty(bool, running)]
+        #[qproperty(QString, status)]
+        type SessionController = super::SessionControllerRust;
+
+        #[qinvokable]
+        fn start(self: Pin<&mut SessionController>);
+
+        #[qinvokable]
+        fn stop(self: Pin<&mut SessionController>);
+    }
+
+    impl cxx_qt::Threading for SessionController {}
 }

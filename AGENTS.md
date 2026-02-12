@@ -20,3 +20,4 @@ Standards
 
 Learnings
 - For CXX-Qt: keep at least one `#[cxx_qt::bridge]` in `src/lib.rs` and include only `src/lib.rs` in `build.rs` `.files(...)`; referencing `src/main.rs` can break the build with `no #[cxx::bridge] module found`
+- For QR refresh: regenerate the QR by creating a fresh `AuthData` and new pairing stream each cycle; reusing the same auth keeps the QR unchanged and the pairing stream times out

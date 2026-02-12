@@ -23,6 +23,7 @@ Kirigami.ApplicationWindow {
             title: "Messages"
 
             readonly property AppState appState: AppState {}
+            readonly property SessionController sessionController: SessionController {}
 
             RowLayout {
                 anchors.fill: parent
@@ -224,7 +225,10 @@ Kirigami.ApplicationWindow {
                 standardButtons: Controls.Dialog.Close
                 width: Math.min(root.width * 0.70, Kirigami.Units.gridUnit * 26)
 
-                onOpened: appState.start_login()
+                onOpened: {
+                    appState.start_login()
+                    sessionController.start()
+                }
 
                 contentItem: ColumnLayout {
                     spacing: Kirigami.Units.largeSpacing
@@ -257,11 +261,22 @@ Kirigami.ApplicationWindow {
                             visible: appState.qr_svg_data_url.length === 0
                         }
                     }
+
                 }
 
                 onClosed: {
                     if (!appState.logged_in) {
                         appState.status_message = "Not logged in"
+                    }
+                }
+            }
+
+            Connections {
+                target: appState
+
+                function onLogged_inChanged() {
+                    if (appState.logged_in && loginDialog.visible) {
+                        loginDialog.close()
                     }
                 }
             }

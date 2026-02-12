@@ -2,7 +2,7 @@ use crate::ffi;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use core::pin::Pin;
-use cxx_qt::{CxxQtThread, Threading};
+use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use libgmessages_rs::{
     auth::AuthData,
@@ -29,6 +29,22 @@ impl Default for AppStateRust {
             qr_url: QString::from(""),
             qr_svg_data_url: QString::from(""),
             status_message: QString::from("Not logged in"),
+        }
+    }
+}
+
+pub struct SessionControllerRust {
+    pub running: bool,
+    pub status: QString,
+    should_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Default for SessionControllerRust {
+    fn default() -> Self {
+        Self {
+            running: false,
+            status: QString::from("Idle"),
+            should_stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 }
@@ -80,48 +96,44 @@ impl crate::ffi::AppState {
 
             let result: Result<bool, String> = runtime.block_on(async move {
                 let store = AuthDataStore::default_store();
-                let auth = store
-                    .load()
-                    .map_err(|error| error.to_string())?
-                    .unwrap_or(AuthData::new().map_err(|error| error.to_string())?);
 
-                let client = GMClient::new(auth);
-                let _ = client.fetch_config().await;
+                loop {
+                    let auth = AuthData::new().map_err(|error| error.to_string())?;
+                    let client = GMClient::new(auth);
+                    let _ = client.fetch_config().await;
 
-                let (qr_url, stream) = client
-                    .start_qr_pairing_stream()
-                    .await
-                    .map_err(|error| error.to_string())?;
+                    let (qr_url, stream) = client
+                        .start_qr_pairing_stream()
+                        .await
+                        .map_err(|error| error.to_string())?;
 
-                let qr_url_string = qr_url.to_string();
-                let svg_data_url = qr_to_svg_data_url(&qr_url_string)
-                    .map_err(|error| error.to_string())?;
+                    let qr_url_string = qr_url.to_string();
+                    let svg_data_url = qr_to_svg_data_url(&qr_url_string)
+                        .map_err(|error| error.to_string())?;
 
-                let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::AppState>| {
-                    qobject.as_mut().set_qr_url(QString::from(&qr_url_string));
-                    qobject
-                        .as_mut()
-                        .set_qr_svg_data_url(QString::from(&svg_data_url));
-                    qobject
-                        .as_mut()
-                        .set_status_message(QString::from("Scan the QR code"));
-                });
+                    let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::AppState>| {
+                        qobject.as_mut().set_qr_url(QString::from(&qr_url_string));
+                        qobject
+                            .as_mut()
+                            .set_qr_svg_data_url(QString::from(&svg_data_url));
+                        qobject
+                            .as_mut()
+                            .set_status_message(QString::from("Scan the QR code"));
+                    });
 
-                let paired = client
-                    .wait_for_qr_pairing_on_stream(stream, Duration::from_secs(300))
-                    .await
-                    .map_err(|error| error.to_string())?;
+                    let paired = client
+                        .wait_for_qr_pairing_on_stream(stream, Duration::from_secs(20))
+                        .await
+                        .map_err(|error| error.to_string())?;
 
-                match paired {
-                    Some(_) => {
+                    if let Some(_) = paired {
                         let auth_handle = client.auth();
                         let auth = auth_handle.lock().await;
                         store
                             .save(&auth)
                             .map_err(|error| error.to_string())?;
-                        Ok(true)
+                        return Ok(true);
                     }
-                    None => Ok(false),
                 }
             });
 
@@ -154,5 +166,106 @@ impl crate::ffi::AppState {
                 }
             }
         });
+    }
+}
+
+impl crate::ffi::SessionController {
+    pub fn start(mut self: Pin<&mut Self>) {
+        if *self.running() {
+            return;
+        }
+
+        self.as_mut().set_running(true);
+        self.as_mut().set_status(QString::from("Starting session..."));
+        self.rust()
+            .should_stop
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let qt_thread: CxxQtThread<ffi::SessionController> = self.qt_thread();
+        let stop_flag = self.rust().should_stop.clone();
+
+        std::thread::spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let message = format!("Session failed: {error}");
+                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
+                        qobject.as_mut().set_status(QString::from(&message));
+                        qobject.as_mut().set_running(false);
+                    });
+                    return;
+                }
+            };
+
+            let result: Result<(), String> = runtime.block_on(async move {
+                let store = AuthDataStore::default_store();
+                let auth = store
+                    .load()
+                    .map_err(|error| error.to_string())?
+                    .unwrap_or(AuthData::new().map_err(|error| error.to_string())?);
+
+                let client = GMClient::new(auth);
+                let mut handler = libgmessages_rs::gmclient::SessionHandler::new(client.clone());
+                let auth_handle = client.auth();
+                let auth_session = {
+                    let auth = auth_handle.lock().await;
+                    auth.session_id().to_string().to_lowercase()
+                };
+                handler.set_session_id(auth_session).await;
+
+                let _ = client
+                    .send_rpc_message_with_id_and_session_no_payload(
+                        libgmessages_rs::proto::rpc::ActionType::GetUpdates,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        handler.session_id(),
+                        handler.session_id(),
+                        true,
+                    )
+                    .await;
+
+                tokio::select! {
+                    result = handler.start_response_loop() => {
+                        result.map_err(|error| error.to_string())
+                    }
+                    _ = async {
+                        while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                        }
+                    } => {
+                        Ok(())
+                    }
+                }
+            });
+
+            match result {
+                Ok(()) => {
+                    let _ = qt_thread.queue(|mut qobject: Pin<&mut ffi::SessionController>| {
+                        qobject.as_mut().set_status(QString::from("Session ended"));
+                        qobject.as_mut().set_running(false);
+                    });
+                }
+                Err(error) => {
+                    let message = format!("Session failed: {error}");
+                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
+                        qobject.as_mut().set_status(QString::from(&message));
+                        qobject.as_mut().set_running(false);
+                    });
+                }
+            }
+        });
+    }
+
+    pub fn stop(mut self: Pin<&mut Self>) {
+        if !*self.running() {
+            return;
+        }
+        self.rust()
+            .should_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.as_mut().set_running(false);
+        self.as_mut().set_status(QString::from("Stopping..."));
     }
 }
