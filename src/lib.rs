@@ -5,6 +5,7 @@ use core::pin::Pin;
 pub use app_state::AppStateRust;
 pub use app_state::SessionControllerRust;
 pub use app_state::ConversationListRust;
+pub use app_state::MessageListRust;
 
 #[cxx_qt::bridge]
 mod ffi {
@@ -85,6 +86,9 @@ mod ffi {
         #[qinvokable]
         fn apply_filter(self: Pin<&mut ConversationList>, filter: &QString);
 
+        #[qinvokable]
+        fn conversation_id(self: &ConversationList, row: i32) -> QString;
+
         #[inherit]
         #[rust_name = "begin_reset_model"]
         fn beginResetModel(self: Pin<&mut Self>);
@@ -93,4 +97,36 @@ mod ffi {
         #[rust_name = "end_reset_model"]
         fn endResetModel(self: Pin<&mut Self>);
     }
+
+    unsafe extern "RustQt" {
+        #[qobject]
+        #[qml_element]
+        #[base = QAbstractListModel]
+        #[qproperty(bool, loading)]
+        type MessageList = super::MessageListRust;
+
+        #[cxx_override]
+        #[rust_name = "row_count"]
+        fn rowCount(&self, parent: &QModelIndex) -> i32;
+
+        #[cxx_override]
+        fn data(&self, index: &QModelIndex, role: i32) -> QVariant;
+
+        #[cxx_override]
+        #[rust_name = "role_names"]
+        fn roleNames(&self) -> QHash_i32_QByteArray;
+
+        #[qinvokable]
+        fn load(self: Pin<&mut MessageList>, conversation_id: &QString);
+
+        #[inherit]
+        #[rust_name = "begin_reset_model"]
+        fn beginResetModel(self: Pin<&mut Self>);
+
+        #[inherit]
+        #[rust_name = "end_reset_model"]
+        fn endResetModel(self: Pin<&mut Self>);
+    }
+
+    impl cxx_qt::Threading for MessageList {}
 }

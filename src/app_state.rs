@@ -56,6 +56,7 @@ impl Default for SessionControllerRust {
 pub struct ConversationItem {
     name: QString,
     preview: QString,
+    conversation_id: String,
 }
 
 pub struct ConversationListRust {
@@ -431,6 +432,7 @@ impl crate::ffi::ConversationList {
                     .map(|convo| ConversationItem {
                         name: QString::from(convo.name),
                         preview: QString::from(""),
+                        conversation_id: convo.conversation_id,
                     })
                     .collect();
 
@@ -466,6 +468,14 @@ impl crate::ffi::ConversationList {
         rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
         self.as_mut().end_reset_model();
     }
+
+    pub fn conversation_id(&self, row: i32) -> QString {
+        let index = row.max(0) as usize;
+        if index >= self.filtered_items.len() {
+            return QString::from("");
+        }
+        QString::from(self.filtered_items[index].conversation_id.as_str())
+    }
 }
 
 fn filter_items(items: &[ConversationItem], filter_text: &str) -> Vec<ConversationItem> {
@@ -483,4 +493,177 @@ fn filter_items(items: &[ConversationItem], filter_text: &str) -> Vec<Conversati
         })
         .cloned()
         .collect()
+}
+
+pub struct MessageItem {
+    body: QString,
+    from_me: bool,
+}
+
+pub struct MessageListRust {
+    pub loading: bool,
+    messages: Vec<MessageItem>,
+}
+
+impl Default for MessageListRust {
+    fn default() -> Self {
+        Self {
+            loading: false,
+            messages: Vec::new(),
+        }
+    }
+}
+
+impl crate::ffi::MessageList {
+    pub fn row_count(&self, _parent: &QModelIndex) -> i32 {
+        self.messages.len() as i32
+    }
+
+    pub fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
+        let row = index.row() as usize;
+        if row >= self.messages.len() {
+            return QVariant::default();
+        }
+
+        let item = &self.messages[row];
+        match role {
+            0 => QVariant::from(&item.body),
+            1 => QVariant::from(&item.from_me),
+            _ => QVariant::default(),
+        }
+    }
+
+    pub fn role_names(&self) -> QHash_i32_QByteArray {
+        let mut roles = QHash_i32_QByteArray::default();
+        roles.insert(0, "body".into());
+        roles.insert(1, "from_me".into());
+        roles
+    }
+
+    pub fn load(mut self: Pin<&mut Self>, conversation_id: &QString) {
+        let conversation_id = conversation_id.to_string();
+        if conversation_id.is_empty() {
+            return;
+        }
+
+        self.as_mut().begin_reset_model();
+        self.as_mut().rust_mut().messages.clear();
+        self.as_mut().end_reset_model();
+        self.as_mut().set_loading(true);
+        let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
+
+        std::thread::spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    eprintln!("message load failed: {error}");
+                    return;
+                }
+            };
+
+            let result: Result<Vec<MessageItem>, String> = runtime.block_on(async move {
+                let store = AuthDataStore::default_store();
+                let auth = store
+                    .load()
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "not logged in".to_string())?;
+
+                let client = GMClient::new(auth);
+                let mut handler = libgmessages_rs::gmclient::SessionHandler::new(client.clone());
+                let auth_handle = client.auth();
+                let auth_session = {
+                    let auth = auth_handle.lock().await;
+                    auth.session_id().to_string().to_lowercase()
+                };
+                handler.set_session_id(auth_session).await;
+
+                let active_session_id = handler.session_id().to_string();
+                let loop_handler = handler.clone();
+                let task = tokio::spawn(async move {
+                    let _ = loop_handler.start_response_loop().await;
+                });
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let _ = handler
+                    .client()
+                    .send_rpc_message_with_id_and_session_no_payload(
+                        libgmessages_rs::proto::rpc::ActionType::GetUpdates,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &active_session_id,
+                        &active_session_id,
+                        true,
+                    )
+                    .await;
+
+                let request = libgmessages_rs::proto::client::ListMessagesRequest {
+                    conversation_id: conversation_id.clone(),
+                    count: 50,
+                    cursor: None,
+                };
+                let response: libgmessages_rs::proto::client::ListMessagesResponse = handler
+                    .send_request(
+                        libgmessages_rs::proto::rpc::ActionType::ListMessages,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &request,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+
+                task.abort();
+
+                let messages = response
+                    .messages
+                    .into_iter()
+                    .filter_map(|message| {
+                        let body = message
+                            .message_info
+                            .iter()
+                            .find_map(|info| match &info.data {
+                                Some(libgmessages_rs::proto::conversations::message_info::Data::MessageContent(content)) => {
+                                    let content_text = content.content.trim();
+                                    if content_text.is_empty() {
+                                        None
+                                    } else {
+                                        Some(content_text.to_string())
+                                    }
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        if body.is_empty() {
+                            return None;
+                        }
+                        let from_me = message.participant_id.is_empty();
+                        Some(MessageItem {
+                            body: QString::from(body),
+                            from_me,
+                        })
+                    })
+                    .collect();
+
+                Ok(messages)
+            });
+
+            match result {
+                Ok(messages) => {
+                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        qobject.as_mut().begin_reset_model();
+                        let mut rust = qobject.as_mut().rust_mut();
+                        rust.messages = messages;
+                        qobject.as_mut().set_loading(false);
+                        qobject.as_mut().end_reset_model();
+                    });
+                }
+                Err(error) => {
+                    eprintln!("message load failed: {error}");
+                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        qobject.as_mut().set_loading(false);
+                    });
+                }
+            }
+        });
+    }
 }

@@ -17,6 +17,9 @@ Kirigami.ApplicationWindow {
     readonly property AppState appState: AppState {}
     readonly property SessionController sessionController: SessionController {}
     readonly property ConversationList conversationList: ConversationList {}
+    readonly property MessageList messageListModel: MessageList {}
+    property int selectedConversationIndex: -1
+    property string selectedConversationName: ""
 
     Component.onCompleted: {
         appState.initialize()
@@ -106,10 +109,27 @@ Kirigami.ApplicationWindow {
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
 
-                                     delegate: Rectangle {
-                                         width: contactsList.width
+                                    delegate: Rectangle {
+                                        width: contactsList.width
                                         height: Kirigami.Units.gridUnit * 3
                                         color: Qt.rgba(0, 0, 0, 0)
+
+                                        Controls.AbstractButton {
+                                            anchors.fill: parent
+                                            onClicked: {
+                                                const convoId = conversationList.conversation_id(index)
+                                                selectedConversationIndex = index
+                                                selectedConversationName = name
+                                                messageListModel.load(convoId)
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            color: Kirigami.Theme.highlightColor
+                                            opacity: 0.12
+                                            visible: index === selectedConversationIndex
+                                        }
 
                                         ColumnLayout {
                                             anchors.fill: parent
@@ -132,6 +152,9 @@ Kirigami.ApplicationWindow {
                                 }
                                 Controls.ScrollBar.vertical: Controls.ScrollBar {
                                     policy: Controls.ScrollBar.AsNeeded
+                                    anchors.top: contactsList.top
+                                    anchors.bottom: contactsList.bottom
+                                    anchors.left: contactsList.right
                                 }
                             }
 
@@ -188,51 +211,124 @@ Kirigami.ApplicationWindow {
                                 anchors.margins: Kirigami.Units.largeSpacing
 
                                 Controls.Label {
-                                    text: "Alice"
+                                    text: selectedConversationName.length > 0 ? selectedConversationName : "Conversation"
                                     font.bold: true
                                     Layout.fillWidth: true
                                 }
-                                Controls.Label {
-                                    text: "Online"
-                                    color: Kirigami.Theme.disabledTextColor
+                                
+                            }
+                        }
+
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            visible: !messageListModel.loading && selectedConversationIndex >= 0
+
+                            ListView {
+                                id: messageList
+
+                                anchors.fill: parent
+                                anchors.rightMargin: Kirigami.Units.smallSpacing
+                                model: messageListModel
+                                clip: true
+                                boundsBehavior: Flickable.StopAtBounds
+                                verticalLayoutDirection: ListView.BottomToTop
+                                spacing: Kirigami.Units.mediumSpacing
+
+                                Controls.ScrollBar.vertical: Controls.ScrollBar {
+                                    policy: Controls.ScrollBar.AsNeeded
+                                }
+
+                                delegate: Item {
+                                    id: messageDelegate
+
+                                    required property int index
+                                    required property string body
+                                    required property bool from_me
+
+                                    width: messageList.width
+                                    height: messageRow.implicitHeight
+
+                                    Row {
+                                        id: messageRow
+
+                                        anchors.left: messageDelegate.from_me ? undefined : parent.left
+                                        anchors.right: messageDelegate.from_me ? parent.right : undefined
+                                        anchors.leftMargin: Kirigami.Units.smallSpacing
+                                        anchors.rightMargin: Kirigami.Units.smallSpacing
+                                        spacing: Kirigami.Units.smallSpacing
+                                        layoutDirection: messageDelegate.from_me ? Qt.RightToLeft : Qt.LeftToRight
+
+                                        Rectangle {
+                                            id: avatar
+
+                                            width: Kirigami.Units.gridUnit * 2
+                                            height: Kirigami.Units.gridUnit * 2
+                                            radius: width / 2
+                                            color: messageDelegate.from_me ? Kirigami.Theme.highlightColor : Kirigami.Theme.disabledTextColor
+                                            anchors.bottom: parent.bottom
+
+                                            Controls.Label {
+                                                anchors.centerIn: parent
+                                                text: messageDelegate.from_me ? "Me" : "?"
+                                                font.pixelSize: Kirigami.Units.gridUnit * 0.7
+                                                color: "white"
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            id: bubble
+
+                                            width: Math.min(
+                                                bubbleText.implicitWidth + Kirigami.Units.gridUnit * 2,
+                                                messageList.width - avatar.width - Kirigami.Units.gridUnit * 4
+                                            )
+                                            height: bubbleText.implicitHeight + Kirigami.Units.gridUnit * 1.2
+                                            radius: Kirigami.Units.gridUnit * 0.6
+                                            color: messageDelegate.from_me ? Kirigami.Theme.highlightColor : Kirigami.Theme.alternateBackgroundColor
+                                            border.width: messageDelegate.from_me ? 0 : 1
+                                            border.color: messageDelegate.from_me ? "transparent" : Kirigami.Theme.disabledTextColor
+
+                                            TextEdit {
+                                                id: bubbleText
+
+                                                anchors.fill: parent
+                                                anchors.margins: Kirigami.Units.gridUnit * 0.6
+                                                text: messageDelegate.body
+                                                color: messageDelegate.from_me ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+                                                wrapMode: Text.WordWrap
+                                                readOnly: true
+                                                selectByMouse: true
+                                                selectedTextColor: messageDelegate.from_me ? Kirigami.Theme.textColor : Kirigami.Theme.highlightedTextColor
+                                                selectionColor: messageDelegate.from_me ? Kirigami.Theme.backgroundColor : Kirigami.Theme.highlightColor
+                                                font.pointSize: Kirigami.Theme.defaultFont.pointSize
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        ListView {
-                            id: messageList
-
-                            model: ListModel {
-                                ListElement { fromMe: false; body: "Hey! How's the project going?" }
-                                ListElement { fromMe: true; body: "Good progress. UI is taking shape." }
-                                ListElement { fromMe: false; body: "Nice. Want to review later?" }
-                                ListElement { fromMe: true; body: "Sure, after I finish the placeholder screens." }
-                            }
-                            clip: true
-                            spacing: Kirigami.Units.smallSpacing
+                        Item {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            visible: messageListModel.loading
 
-                            delegate: RowLayout {
-                                width: messageList.width
-                                spacing: Kirigami.Units.largeSpacing
+                            Controls.BusyIndicator {
+                                anchors.centerIn: parent
+                                running: true
+                            }
+                        }
 
-                                Item { Layout.fillWidth: model.fromMe }
+                        Item {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            visible: selectedConversationIndex < 0 && !messageListModel.loading
 
-                                Rectangle {
-                                    color: model.fromMe ? Kirigami.Theme.highlightColor : Kirigami.Theme.alternateBackgroundColor
-                                    radius: Kirigami.Units.smallSpacing
-                                    Layout.preferredWidth: Math.min(messageList.width * 0.70, Kirigami.Units.gridUnit * 22)
-
-                                    Controls.Label {
-                                        text: body
-                                        color: model.fromMe ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
-                                        wrapMode: Text.WordWrap
-                                        padding: Kirigami.Units.largeSpacing
-                                    }
-                                }
-
-                                Item { Layout.fillWidth: !model.fromMe }
+                            Controls.Label {
+                                anchors.centerIn: parent
+                                text: "Select a conversation to view messages"
+                                color: Kirigami.Theme.disabledTextColor
                             }
                         }
 
