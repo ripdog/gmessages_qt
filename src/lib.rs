@@ -24,6 +24,9 @@ mod ffi {
 
         #[qinvokable]
         fn start_login(self: Pin<&mut AppState>);
+
+        #[qinvokable]
+        fn initialize(self: Pin<&mut AppState>);
     }
 
     impl cxx_qt::Threading for AppState {}

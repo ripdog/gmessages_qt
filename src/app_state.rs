@@ -167,6 +167,42 @@ impl crate::ffi::AppState {
             }
         });
     }
+
+    pub fn initialize(self: Pin<&mut Self>) {
+        let qt_thread: CxxQtThread<ffi::AppState> = self.qt_thread();
+
+        std::thread::spawn(move || {
+            let store = AuthDataStore::default_store();
+            let result = store.load();
+
+            match result {
+                Ok(Some(_auth)) => {
+                    let _ = qt_thread.queue(|mut qobject: Pin<&mut ffi::AppState>| {
+                        qobject.as_mut().set_logged_in(true);
+                        qobject.as_mut().set_login_in_progress(false);
+                        qobject.as_mut().set_status_message(QString::from("Logged in"));
+                    });
+                }
+                Ok(None) => {
+                    let _ = qt_thread.queue(|mut qobject: Pin<&mut ffi::AppState>| {
+                        qobject.as_mut().set_logged_in(false);
+                        qobject.as_mut().set_login_in_progress(false);
+                        qobject
+                            .as_mut()
+                            .set_status_message(QString::from("Not logged in"));
+                    });
+                }
+                Err(error) => {
+                    let message = format!("Auth load failed: {error}");
+                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::AppState>| {
+                        qobject.as_mut().set_logged_in(false);
+                        qobject.as_mut().set_login_in_progress(false);
+                        qobject.as_mut().set_status_message(QString::from(&message));
+                    });
+                }
+            }
+        });
+    }
 }
 
 impl crate::ffi::SessionController {

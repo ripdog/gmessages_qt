@@ -25,6 +25,10 @@ Kirigami.ApplicationWindow {
             readonly property AppState appState: AppState {}
             readonly property SessionController sessionController: SessionController {}
 
+            Component.onCompleted: {
+                appState.initialize()
+            }
+
             RowLayout {
                 anchors.fill: parent
                 spacing: Kirigami.Units.largeSpacing
@@ -277,6 +281,9 @@ Kirigami.ApplicationWindow {
                 function onLogged_inChanged() {
                     if (appState.logged_in && loginDialog.visible) {
                         loginDialog.close()
+                    }
+                    if (appState.logged_in && !sessionController.running) {
+                        sessionController.start()
                     }
                 }
             }
