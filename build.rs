@@ -1,12 +1,9 @@
 use cxx_qt_build::{CxxQtBuilder, QmlModule};
 
 fn main() {
-    CxxQtBuilder::new()
-        .qml_module(QmlModule {
-            uri: "org.gmessages_qt",
-            qml_files: &["src/qml/Main.qml"],
-            rust_files: &["src/main.rs"],
-            ..Default::default()
-        })
-        .build();
+    CxxQtBuilder::new_qml_module(
+        QmlModule::new("org.gmessages_qt").qml_files(&["src/qml/Main.qml"]),
+    )
+    .files(["src/lib.rs"])
+    .build();
 }
