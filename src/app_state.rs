@@ -13,6 +13,7 @@ use libgmessages_rs::{
 use qrcode::render::svg;
 use qrcode::QrCode;
 use std::time::Duration;
+use uuid::Uuid;
 use crate::ffi::QHash_i32_QByteArray;
 use crate::ffi::QModelIndex;
 use crate::ffi::QVariant;
@@ -536,18 +537,12 @@ fn filter_items(items: &[ConversationItem], filter_text: &str) -> Vec<Conversati
         .collect()
 }
 
-fn format_human_timestamp(timestamp: i64) -> String {
-    if timestamp <= 0 {
+fn format_human_timestamp(timestamp_micros: i64) -> String {
+    if timestamp_micros <= 0 {
         return String::new();
     }
 
-    let timestamp_millis = if timestamp >= 1_000_000_000_000_000 {
-        timestamp / 1000
-    } else if timestamp < 1_000_000_000_000 {
-        timestamp.saturating_mul(1000)
-    } else {
-        timestamp
-    };
+    let timestamp_millis = timestamp_micros / 1000;
 
     let utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_millis);
     let Some(utc_time) = utc else {
@@ -626,6 +621,7 @@ pub struct MessageItem {
 pub struct MessageListRust {
     pub loading: bool,
     messages: Vec<MessageItem>,
+    selected_conversation_id: String,
 }
 
 impl Default for MessageListRust {
@@ -633,6 +629,7 @@ impl Default for MessageListRust {
         Self {
             loading: false,
             messages: Vec::new(),
+            selected_conversation_id: String::new(),
         }
     }
 }
@@ -672,7 +669,9 @@ impl crate::ffi::MessageList {
         }
 
         self.as_mut().begin_reset_model();
-        self.as_mut().rust_mut().messages.clear();
+        let mut rust = self.as_mut().rust_mut();
+        rust.messages.clear();
+        rust.selected_conversation_id = conversation_id.clone();
         self.as_mut().end_reset_model();
         self.as_mut().set_loading(true);
         let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
@@ -820,6 +819,126 @@ impl crate::ffi::MessageList {
                     });
                 }
             }
+        });
+    }
+
+    pub fn send_message(self: Pin<&mut Self>, text: &QString) {
+        let body = text.to_string();
+        let body = body.trim().to_string();
+        if body.is_empty() {
+            return;
+        }
+
+        let conversation_id = self.rust().selected_conversation_id.clone();
+        if conversation_id.is_empty() {
+            return;
+        }
+
+        let conversation_id_for_reload = conversation_id.clone();
+
+        let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
+
+        std::thread::spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    eprintln!("message send failed: {error}");
+                    return;
+                }
+            };
+
+            let result: Result<(), String> = runtime.block_on(async move {
+                let store = AuthDataStore::default_store();
+                let auth = store
+                    .load()
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "not logged in".to_string())?;
+
+                let client = GMClient::new(auth);
+                let mut handler = libgmessages_rs::gmclient::SessionHandler::new(client.clone());
+                let auth_handle = client.auth();
+                let auth_session = {
+                    let auth = auth_handle.lock().await;
+                    auth.session_id().to_string().to_lowercase()
+                };
+                handler.set_session_id(auth_session).await;
+
+                let active_session_id = handler.session_id().to_string();
+                let loop_handler = handler.clone();
+                let task = tokio::spawn(async move {
+                    let _ = loop_handler.start_response_loop().await;
+                });
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let _ = handler
+                    .client()
+                    .send_rpc_message_with_id_and_session_no_payload(
+                        libgmessages_rs::proto::rpc::ActionType::GetUpdates,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &active_session_id,
+                        &active_session_id,
+                        true,
+                    )
+                    .await;
+
+                let tmp_id = Uuid::new_v4().to_string().to_lowercase();
+                let message_info = libgmessages_rs::proto::conversations::MessageInfo {
+                    action_message_id: None,
+                    data: Some(
+                        libgmessages_rs::proto::conversations::message_info::Data::MessageContent(
+                            libgmessages_rs::proto::conversations::MessageContent {
+                                content: body.clone(),
+                            },
+                        ),
+                    ),
+                };
+                let payload = libgmessages_rs::proto::client::MessagePayload {
+                    tmp_id: tmp_id.clone(),
+                    message_payload_content: Some(libgmessages_rs::proto::client::MessagePayloadContent {
+                        message_content: Some(libgmessages_rs::proto::conversations::MessageContent {
+                            content: body.clone(),
+                        }),
+                    }),
+                    conversation_id: conversation_id.clone(),
+                    participant_id: String::new(),
+                    message_info: vec![message_info],
+                    tmp_id2: tmp_id.clone(),
+                };
+                let request = libgmessages_rs::proto::client::SendMessageRequest {
+                    conversation_id: conversation_id.clone(),
+                    message_payload: Some(payload),
+                    sim_payload: None,
+                    tmp_id,
+                    force_rcs: false,
+                    reply: None,
+                };
+
+                let _: libgmessages_rs::proto::client::SendMessageResponse = handler
+                    .send_request(
+                        libgmessages_rs::proto::rpc::ActionType::SendMessage,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &request,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+
+                task.abort();
+                Ok(())
+            });
+
+            if let Err(error) = result {
+                eprintln!("message send failed: {error}");
+                return;
+            }
+
+            let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                qobject
+                    .as_mut()
+                    .load(&QString::from(conversation_id_for_reload));
+            });
         });
     }
 }

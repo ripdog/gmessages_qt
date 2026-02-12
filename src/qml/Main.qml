@@ -21,6 +21,7 @@ Kirigami.ApplicationWindow {
     property int selectedConversationIndex: -1
     property string selectedConversationName: ""
     property string selectedMeParticipantId: ""
+    property string outgoingText: ""
 
     Component.onCompleted: {
         appState.initialize()
@@ -346,12 +347,27 @@ Kirigami.ApplicationWindow {
                             Layout.fillWidth: true
                             spacing: Kirigami.Units.largeSpacing
 
+                            enabled: selectedConversationIndex >= 0 && !messageListModel.loading
+
                             Controls.TextField {
                                 placeholderText: "Type a message"
                                 Layout.fillWidth: true
+                                text: outgoingText
+                                onTextChanged: outgoingText = text
+                                onAccepted: {
+                                    if (outgoingText.trim().length > 0) {
+                                        messageListModel.send_message(outgoingText)
+                                        outgoingText = ""
+                                    }
+                                }
                             }
                             Controls.Button {
                                 text: "Send"
+                                enabled: outgoingText.trim().length > 0
+                                onClicked: {
+                                    messageListModel.send_message(outgoingText)
+                                    outgoingText = ""
+                                }
                             }
                         }
                     }

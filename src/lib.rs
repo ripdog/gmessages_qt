@@ -122,6 +122,9 @@ mod ffi {
         #[qinvokable]
         fn load(self: Pin<&mut MessageList>, conversation_id: &QString);
 
+        #[qinvokable]
+        fn send_message(self: Pin<&mut MessageList>, text: &QString);
+
         #[inherit]
         #[rust_name = "begin_reset_model"]
         fn beginResetModel(self: Pin<&mut Self>);
