@@ -52,11 +52,23 @@ mod ffi {
         #[qproperty(QString, status)]
         type SessionController = super::SessionControllerRust;
 
+        #[qsignal]
+        fn message_received(
+            self: Pin<&mut SessionController>,
+            conversation_id: &QString,
+            participant_id: &QString,
+            body: &QString,
+            transport_type: i64,
+            message_id: &QString,
+            timestamp_micros: i64,
+        );
+
         #[qinvokable]
         fn start(self: Pin<&mut SessionController>);
 
         #[qinvokable]
         fn stop(self: Pin<&mut SessionController>);
+
     }
 
     impl cxx_qt::Threading for SessionController {}
@@ -124,6 +136,17 @@ mod ffi {
 
         #[qinvokable]
         fn send_message(self: Pin<&mut MessageList>, text: &QString);
+
+        #[qinvokable]
+        fn handle_message_event(
+            self: Pin<&mut MessageList>,
+            conversation_id: &QString,
+            participant_id: &QString,
+            body: &QString,
+            transport_type: i64,
+            message_id: &QString,
+            timestamp_micros: i64,
+        );
 
         #[inherit]
         #[rust_name = "begin_reset_model"]

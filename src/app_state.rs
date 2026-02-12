@@ -10,6 +10,7 @@ use libgmessages_rs::{
     gmclient::GMClient,
     store::AuthDataStore,
 };
+use futures_util::StreamExt;
 use qrcode::render::svg;
 use qrcode::QrCode;
 use std::time::Duration;
@@ -269,7 +270,9 @@ impl crate::ffi::SessionController {
                 }
             };
 
+            let status_thread = qt_thread.clone();
             let result: Result<(), String> = runtime.block_on(async move {
+                eprintln!("[session] start long-poll loop");
                 let store = AuthDataStore::default_store();
                 let auth = store
                     .load()
@@ -294,19 +297,146 @@ impl crate::ffi::SessionController {
                         true,
                     )
                     .await;
+                eprintln!("[session] primed GetUpdates");
 
-                tokio::select! {
-                    result = handler.start_response_loop() => {
-                        result.map_err(|error| error.to_string())
-                    }
-                    _ = async {
-                        while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                            tokio::time::sleep(Duration::from_millis(250)).await;
+                let stream = handler.client().start_long_poll_stream().await.map_err(|error| error.to_string())?;
+                eprintln!("[session] long-poll stream started");
+                let mut skip_count: i32 = 0;
+
+                let loop_handler = handler.clone();
+                let loop_stop = stop_flag.clone();
+                let session_thread = status_thread.clone();
+                let loop_task = tokio::spawn(async move {
+                    let mut stream = stream;
+                    loop {
+                        if loop_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
                         }
-                    } => {
-                        Ok(())
+                        let item = stream.next().await;
+                        let Some(item) = item else { break; };
+                        let payload = match item {
+                            Ok(payload) => payload,
+                            Err(err) => return Err(libgmessages_rs::gmclient::SessionError::Client(err)),
+                        };
+                        eprintln!("[session] payload received: data={} ack={} heartbeat={}", payload.data.is_some(), payload.ack.is_some(), payload.heartbeat.is_some());
+                        if let Some(ack) = payload.ack.as_ref() {
+                            if let Some(count) = ack.count {
+                                skip_count = count;
+                                eprintln!("[session] start ack count set to {skip_count}");
+                            }
+                        }
+                        let Some(data) = payload.data.as_ref() else { continue; };
+                        eprintln!("[session] data route={} message_type={} response_id={}", data.bugle_route, data.message_type, data.response_id);
+                        if skip_count > 0 {
+                            skip_count -= 1;
+                            eprintln!("[session] skipping payload, remaining {skip_count}");
+                            continue;
+                        }
+                        if data.bugle_route != libgmessages_rs::proto::rpc::BugleRoute::DataEvent as i32 {
+                            eprintln!("[session] ignored non-DataEvent route");
+                            continue;
+                        }
+
+                        let updates = loop_handler
+                            .client()
+                            .decode_update_events_from_message(data)
+                            .await
+                            .map_err(libgmessages_rs::gmclient::SessionError::from)?;
+                        if updates.is_none() {
+                            eprintln!("[session] update decode returned None");
+                        }
+                        let Some(updates) = updates else { continue; };
+                        eprintln!("[session] update event decoded");
+                        if let Some(event) = updates.event {
+                            if let libgmessages_rs::proto::events::update_events::Event::MessageEvent(message_event) = event {
+                                eprintln!("[session] message event count={}", message_event.data.len());
+                                for message in message_event.data {
+                                    let body = message
+                                        .message_info
+                                        .iter()
+                                        .find_map(|info| match &info.data {
+                                            Some(libgmessages_rs::proto::conversations::message_info::Data::MessageContent(content)) => {
+                                                let content_text = content.content.trim();
+                                                if content_text.is_empty() {
+                                                    None
+                                                } else {
+                                                    Some(content_text.to_string())
+                                                }
+                                            }
+                                            _ => None,
+                                        })
+                                        .unwrap_or_default();
+                                    if body.is_empty() {
+                                        eprintln!("[session] message skipped: empty body convo_id={}", message.conversation_id);
+                                        continue;
+                                    }
+
+                                    let conversation_id = message.conversation_id.clone();
+                                    let participant_id = message.participant_id.clone();
+                                    let transport_type = message.r#type;
+                                    let body_text = body.clone();
+                                    eprintln!("[session] dispatch message convo_id={} participant_id={} type={}", conversation_id, participant_id, transport_type);
+                                    let request_id = if !message.message_id.is_empty() {
+                                        message.message_id.clone()
+                                    } else if !message.tmp_id.is_empty() {
+                                        message.tmp_id.clone()
+                                    } else {
+                                        message.another_message_id.as_ref().map(|id| id.message_id.clone()).unwrap_or_default()
+                                    };
+
+                                    let timestamp_micros = message.timestamp;
+
+                                    let request_id_for_signal = request_id.clone();
+                                    let _ = session_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
+                                        qobject.as_mut().message_received(
+                                            &QString::from(conversation_id.clone()),
+                                            &QString::from(participant_id.clone()),
+                                            &QString::from(body_text.clone()),
+                                            transport_type,
+                                            &QString::from(request_id_for_signal.clone()),
+                                            timestamp_micros,
+                                        );
+                                    });
+
+                                    if !request_id.is_empty() {
+                                        let client_clone = loop_handler.client();
+                                        tokio::spawn(async move {
+                                            let _ = client_clone.ack_messages(vec![request_id]).await;
+                                        });
+                                    }
+                                }
+                            }
+                        }
                     }
-                }
+                    Ok(())
+                });
+
+                let event_stop = stop_flag.clone();
+                let event_handler = handler.clone();
+                let event_task: tokio::task::JoinHandle<Result<(), libgmessages_rs::gmclient::SessionError>> = tokio::spawn(async move {
+                    while !event_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        let _ = event_handler
+                            .client()
+                            .send_rpc_message_with_id_and_session_no_payload(
+                                libgmessages_rs::proto::rpc::ActionType::GetUpdates,
+                                libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                                event_handler.session_id(),
+                                event_handler.session_id(),
+                                true,
+                            )
+                            .await;
+                        eprintln!("[session] GetUpdates tick");
+                    }
+                    Ok(())
+                });
+
+                let loop_result = loop_task
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result.map_err(|error| error.to_string()))?;
+                event_task.abort();
+                Ok(loop_result)
             });
 
             match result {
@@ -616,12 +746,15 @@ pub struct MessageItem {
     body: QString,
     from_me: bool,
     transport_type: i64,
+    timestamp_micros: i64,
+    message_id: String,
 }
 
 pub struct MessageListRust {
     pub loading: bool,
     messages: Vec<MessageItem>,
     selected_conversation_id: String,
+    me_participant_id: String,
 }
 
 impl Default for MessageListRust {
@@ -630,6 +763,7 @@ impl Default for MessageListRust {
             loading: false,
             messages: Vec::new(),
             selected_conversation_id: String::new(),
+            me_participant_id: String::new(),
         }
     }
 }
@@ -650,6 +784,8 @@ impl crate::ffi::MessageList {
             0 => QVariant::from(&item.body),
             1 => QVariant::from(&item.from_me),
             2 => QVariant::from(&item.transport_type),
+            3 => QVariant::from(&item.timestamp_micros),
+            4 => QVariant::from(&QString::from(item.message_id.as_str())),
             _ => QVariant::default(),
         }
     }
@@ -659,6 +795,8 @@ impl crate::ffi::MessageList {
         roles.insert(0, "body".into());
         roles.insert(1, "from_me".into());
         roles.insert(2, "transport_type".into());
+        roles.insert(3, "timestamp_micros".into());
+        roles.insert(4, "message_id".into());
         roles
     }
 
@@ -672,10 +810,10 @@ impl crate::ffi::MessageList {
         let mut rust = self.as_mut().rust_mut();
         rust.messages.clear();
         rust.selected_conversation_id = conversation_id.clone();
+        rust.me_participant_id.clear();
         self.as_mut().end_reset_model();
         self.as_mut().set_loading(true);
         let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
-
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -688,7 +826,7 @@ impl crate::ffi::MessageList {
                 }
             };
 
-            let result: Result<Vec<MessageItem>, String> = runtime.block_on(async move {
+            let result: Result<(Vec<MessageItem>, String), String> = runtime.block_on(async move {
                 let store = AuthDataStore::default_store();
                 let auth = store
                     .load()
@@ -767,7 +905,7 @@ impl crate::ffi::MessageList {
 
                 task.abort();
 
-                let messages = response
+                let mut messages: Vec<MessageItem> = response
                     .messages
                     .into_iter()
                     .filter_map(|message| {
@@ -791,23 +929,40 @@ impl crate::ffi::MessageList {
                         }
                         let from_me = !me_participant_id.is_empty()
                             && message.participant_id == me_participant_id;
+                        let message_id = if !message.message_id.is_empty() {
+                            message.message_id.clone()
+                        } else if !message.tmp_id.is_empty() {
+                            message.tmp_id.clone()
+                        } else {
+                            message
+                                .another_message_id
+                                .as_ref()
+                                .map(|id| id.message_id.clone())
+                                .unwrap_or_default()
+                        };
+
                         Some(MessageItem {
                             body: QString::from(body),
                             from_me,
                             transport_type: message.r#type,
+                            timestamp_micros: message.timestamp,
+                            message_id,
                         })
                     })
                     .collect();
 
-                Ok(messages)
+                messages.sort_by_key(|item| item.timestamp_micros);
+
+                Ok((messages, me_participant_id))
             });
 
             match result {
-                Ok(messages) => {
+                Ok((messages, me_participant_id)) => {
                     let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                         qobject.as_mut().begin_reset_model();
                         let mut rust = qobject.as_mut().rust_mut();
                         rust.messages = messages;
+                        rust.me_participant_id = me_participant_id;
                         qobject.as_mut().set_loading(false);
                         qobject.as_mut().end_reset_model();
                     });
@@ -833,10 +988,6 @@ impl crate::ffi::MessageList {
         if conversation_id.is_empty() {
             return;
         }
-
-        let conversation_id_for_reload = conversation_id.clone();
-
-        let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
 
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -933,12 +1084,60 @@ impl crate::ffi::MessageList {
                 eprintln!("message send failed: {error}");
                 return;
             }
-
-            let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
-                qobject
-                    .as_mut()
-                    .load(&QString::from(conversation_id_for_reload));
-            });
         });
+    }
+
+    pub fn handle_message_event(
+        mut self: Pin<&mut Self>,
+        conversation_id: &QString,
+        participant_id: &QString,
+        body: &QString,
+        transport_type: i64,
+        message_id: &QString,
+        timestamp_micros: i64,
+    ) {
+        let conversation_id = conversation_id.to_string();
+        if conversation_id.is_empty() {
+            return;
+        }
+        if conversation_id != self.rust().selected_conversation_id {
+            eprintln!("[message] ignored: convo_id {} != selected {}", conversation_id, self.rust().selected_conversation_id);
+            return;
+        }
+
+        let participant_id = participant_id.to_string();
+        let from_me = !self.rust().me_participant_id.is_empty()
+            && participant_id == self.rust().me_participant_id;
+
+        let message_id = message_id.to_string();
+        if !message_id.is_empty()
+            && self
+                .rust()
+                .messages
+                .iter()
+                .any(|item| item.message_id == message_id)
+        {
+            eprintln!("[message] duplicate ignored: message_id={message_id}");
+            return;
+        }
+
+        let body = body.to_string();
+        if body.trim().is_empty() {
+            return;
+        }
+
+        eprintln!("[message] append: convo_id={} from_me={} type={}", conversation_id, from_me, transport_type);
+        self.as_mut().begin_reset_model();
+        let mut rust = self.as_mut().rust_mut();
+        let new_item = MessageItem {
+            body: QString::from(body),
+            from_me,
+            transport_type,
+            timestamp_micros,
+            message_id,
+        };
+        rust.messages.push(new_item);
+        rust.messages.sort_by_key(|item| item.timestamp_micros);
+        self.as_mut().end_reset_model();
     }
 }

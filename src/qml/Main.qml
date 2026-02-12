@@ -243,8 +243,14 @@ Kirigami.ApplicationWindow {
                                 model: messageListModel
                                 clip: true
                                 boundsBehavior: Flickable.StopAtBounds
-                                verticalLayoutDirection: ListView.BottomToTop
+                                verticalLayoutDirection: ListView.TopToBottom
                                 spacing: Kirigami.Units.mediumSpacing
+
+                                onCountChanged: {
+                                    if (count > 0) {
+                                        positionViewAtEnd()
+                                    }
+                                }
 
                                 Controls.ScrollBar.vertical: Controls.ScrollBar {
                                     policy: Controls.ScrollBar.AsNeeded
@@ -449,6 +455,14 @@ Kirigami.ApplicationWindow {
 
         function onOpened() {
             conversationList.load()
+        }
+    }
+
+    Connections {
+        target: sessionController
+
+        function onMessage_received(conversationId, participantId, body, transportType, messageId, timestampMicros) {
+            messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, timestampMicros)
         }
     }
 }
