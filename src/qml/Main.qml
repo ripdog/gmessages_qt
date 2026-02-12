@@ -14,25 +14,20 @@ Kirigami.ApplicationWindow {
     width: minimumWidth
     height: minimumHeight
 
-    pageStack.initialPage: initPage
+    readonly property AppState appState: AppState {}
+    readonly property SessionController sessionController: SessionController {}
+    readonly property ConversationList conversationList: ConversationList {}
 
-    Component {
-        id: initPage
+    Component.onCompleted: {
+        appState.initialize()
+    }
 
-        Kirigami.Page {
-            title: "Messages"
+    pageStack.initialPage: Kirigami.Page {
+        title: "Messages"
 
-            readonly property AppState appState: AppState {}
-            readonly property SessionController sessionController: SessionController {}
-            readonly property ConversationList conversationList: ConversationList {}
-
-            Component.onCompleted: {
-                appState.initialize()
-            }
-
-            RowLayout {
-                anchors.fill: parent
-                spacing: Kirigami.Units.largeSpacing
+        RowLayout {
+            anchors.fill: parent
+            spacing: Kirigami.Units.largeSpacing
 
                 Rectangle {
                     id: contactsPane
@@ -108,9 +103,11 @@ Kirigami.ApplicationWindow {
                                     boundsBehavior: Flickable.StopAtBounds
                                     maximumFlickVelocity: 9000
                                     flickDeceleration: 4000
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
 
-                                    delegate: Rectangle {
-                                        width: ListView.view.width
+                                     delegate: Rectangle {
+                                         width: contactsList.width
                                         height: Kirigami.Units.gridUnit * 3
                                         color: Qt.rgba(0, 0, 0, 0)
 
@@ -135,27 +132,31 @@ Kirigami.ApplicationWindow {
                                 }
                                 Controls.ScrollBar.vertical: Controls.ScrollBar {
                                     policy: Controls.ScrollBar.AsNeeded
-                                    anchors.top: contactsList.top
-                                    anchors.bottom: contactsList.bottom
-                                    anchors.left: contactsList.right
                                 }
                             }
 
                             Item {
-                                anchors.fill: parent
-                                visible: conversationList.loading
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                visible: conversationList.loading || contactsList.count === 0
 
-                                Controls.BusyIndicator {
+                                ColumnLayout {
                                     anchors.centerIn: parent
-                                    running: true
-                                }
-                            }
+                                    spacing: Kirigami.Units.largeSpacing
 
-                            Controls.Label {
-                                anchors.centerIn: parent
-                                text: "No conversations"
-                                color: Kirigami.Theme.disabledTextColor
-                                visible: !conversationList.loading && contactsList.count === 0
+                                    Controls.BusyIndicator {
+                                        running: conversationList.loading
+                                        visible: conversationList.loading
+                                        Layout.alignment: Qt.AlignHCenter
+                                    }
+
+                                    Controls.Label {
+                                        text: "No conversations"
+                                        color: Kirigami.Theme.disabledTextColor
+                                        visible: !conversationList.loading && contactsList.count === 0
+                                        Layout.alignment: Qt.AlignHCenter
+                                    }
+                                }
                             }
                         }
                     }
@@ -213,7 +214,7 @@ Kirigami.ApplicationWindow {
                             Layout.fillHeight: true
 
                             delegate: RowLayout {
-                                width: ListView.view.width
+                                width: messageList.width
                                 spacing: Kirigami.Units.largeSpacing
 
                                 Item { Layout.fillWidth: model.fromMe }
@@ -221,7 +222,7 @@ Kirigami.ApplicationWindow {
                                 Rectangle {
                                     color: model.fromMe ? Kirigami.Theme.highlightColor : Kirigami.Theme.alternateBackgroundColor
                                     radius: Kirigami.Units.smallSpacing
-                                    Layout.preferredWidth: Math.min(ListView.view.width * 0.70, Kirigami.Units.gridUnit * 22)
+                                    Layout.preferredWidth: Math.min(messageList.width * 0.70, Kirigami.Units.gridUnit * 22)
 
                                     Controls.Label {
                                         text: body
@@ -305,19 +306,27 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-            Connections {
-                target: appState
+    }
 
-                function onLogged_inChanged() {
-                    if (appState.logged_in && loginDialog.visible) {
-                        loginDialog.close()
-                    }
-                    if (appState.logged_in && !sessionController.running) {
-                        sessionController.start()
-                        conversationList.load()
-                    }
-                }
+    Connections {
+        target: appState
+
+        function onLogged_inChanged() {
+            if (appState.logged_in && loginDialog.visible) {
+                loginDialog.close()
             }
+            if (appState.logged_in && !sessionController.running) {
+                sessionController.start()
+                conversationList.load()
+            }
+        }
+    }
+
+    Connections {
+        target: loginDialog
+
+        function onOpened() {
+            conversationList.load()
         }
     }
 }
