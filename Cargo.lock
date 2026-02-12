@@ -1005,7 +1005,6 @@ dependencies = [
  "cxx-qt-lib",
  "cxx-qt-lib-extras",
  "libgmessages-rs",
- "markdown",
  "qrcode 0.14.1",
  "tokio",
 ]
@@ -1501,15 +1500,6 @@ name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
-
-[[package]]
-name = "markdown"
-version = "1.0.0-alpha.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21e27d6220ce21f80ce5c4201f23a37c6f1ad037c72c9d1ff215c2919605a5d6"
-dependencies = [
- "unicode-id",
-]
 
 [[package]]
 name = "memchr"
@@ -2628,12 +2618,6 @@ name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
-
-[[package]]
-name = "unicode-id"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70ba288e709927c043cbe476718d37be306be53fb1fafecd0dbe36d072be2580"
 
 [[package]]
 name = "unicode-ident"

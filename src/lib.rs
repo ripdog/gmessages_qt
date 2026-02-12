@@ -89,6 +89,9 @@ mod ffi {
         #[qinvokable]
         fn conversation_id(self: &ConversationList, row: i32) -> QString;
 
+        #[qinvokable]
+        fn me_participant_id(self: &ConversationList, row: i32) -> QString;
+
         #[inherit]
         #[rust_name = "begin_reset_model"]
         fn beginResetModel(self: Pin<&mut Self>);

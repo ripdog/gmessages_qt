@@ -57,6 +57,7 @@ pub struct ConversationItem {
     name: QString,
     preview: QString,
     conversation_id: String,
+    me_participant_id: String,
 }
 
 pub struct ConversationListRust {
@@ -433,6 +434,20 @@ impl crate::ffi::ConversationList {
                         name: QString::from(convo.name),
                         preview: QString::from(""),
                         conversation_id: convo.conversation_id,
+                        me_participant_id: convo
+                            .participants
+                            .iter()
+                            .find_map(|participant| {
+                                if participant.is_me {
+                                    participant
+                                        .id
+                                        .as_ref()
+                                        .map(|id| id.participant_id.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_default(),
                     })
                     .collect();
 
@@ -476,6 +491,14 @@ impl crate::ffi::ConversationList {
         }
         QString::from(self.filtered_items[index].conversation_id.as_str())
     }
+
+    pub fn me_participant_id(&self, row: i32) -> QString {
+        let index = row.max(0) as usize;
+        if index >= self.filtered_items.len() {
+            return QString::from("");
+        }
+        QString::from(self.filtered_items[index].me_participant_id.as_str())
+    }
 }
 
 fn filter_items(items: &[ConversationItem], filter_text: &str) -> Vec<ConversationItem> {
@@ -498,6 +521,7 @@ fn filter_items(items: &[ConversationItem], filter_text: &str) -> Vec<Conversati
 pub struct MessageItem {
     body: QString,
     from_me: bool,
+    transport_type: i64,
 }
 
 pub struct MessageListRust {
@@ -529,6 +553,7 @@ impl crate::ffi::MessageList {
         match role {
             0 => QVariant::from(&item.body),
             1 => QVariant::from(&item.from_me),
+            2 => QVariant::from(&item.transport_type),
             _ => QVariant::default(),
         }
     }
@@ -537,6 +562,7 @@ impl crate::ffi::MessageList {
         let mut roles = QHash_i32_QByteArray::default();
         roles.insert(0, "body".into());
         roles.insert(1, "from_me".into());
+        roles.insert(2, "transport_type".into());
         roles
     }
 
@@ -612,6 +638,35 @@ impl crate::ffi::MessageList {
                     .await
                     .map_err(|error| error.to_string())?;
 
+                let convo_request = libgmessages_rs::proto::client::GetConversationRequest {
+                    conversation_id: conversation_id.clone(),
+                };
+                let convo_response: libgmessages_rs::proto::client::GetConversationResponse = handler
+                    .send_request(
+                        libgmessages_rs::proto::rpc::ActionType::GetConversation,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &convo_request,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+
+                let me_participant_id = convo_response
+                    .conversation
+                    .as_ref()
+                    .and_then(|convo| {
+                        convo.participants.iter().find_map(|participant| {
+                            if participant.is_me {
+                                participant
+                                    .id
+                                    .as_ref()
+                                    .map(|id| id.participant_id.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .unwrap_or_default();
+
                 task.abort();
 
                 let messages = response
@@ -636,10 +691,12 @@ impl crate::ffi::MessageList {
                         if body.is_empty() {
                             return None;
                         }
-                        let from_me = message.participant_id.is_empty();
+                        let from_me = !me_participant_id.is_empty()
+                            && message.participant_id == me_participant_id;
                         Some(MessageItem {
                             body: QString::from(body),
                             from_me,
+                            transport_type: message.r#type,
                         })
                     })
                     .collect();

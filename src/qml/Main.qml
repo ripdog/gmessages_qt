@@ -20,6 +20,7 @@ Kirigami.ApplicationWindow {
     readonly property MessageList messageListModel: MessageList {}
     property int selectedConversationIndex: -1
     property string selectedConversationName: ""
+    property string selectedMeParticipantId: ""
 
     Component.onCompleted: {
         appState.initialize()
@@ -120,6 +121,7 @@ Kirigami.ApplicationWindow {
                                                 const convoId = conversationList.conversation_id(index)
                                                 selectedConversationIndex = index
                                                 selectedConversationName = name
+                                                selectedMeParticipantId = conversationList.me_participant_id(index)
                                                 messageListModel.load(convoId)
                                             }
                                         }
