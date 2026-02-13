@@ -60,7 +60,9 @@ mod ffi {
             body: &QString,
             transport_type: i64,
             message_id: &QString,
+            tmp_id: &QString,
             timestamp_micros: i64,
+            status_code: i32,
         );
 
         #[qinvokable]
@@ -145,7 +147,9 @@ mod ffi {
             body: &QString,
             transport_type: i64,
             message_id: &QString,
+            tmp_id: &QString,
             timestamp_micros: i64,
+            status_code: i32,
         );
 
         #[inherit]

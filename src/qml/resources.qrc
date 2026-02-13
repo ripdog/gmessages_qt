@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/">
+        <file>../svg/sentIcon.svg</file>
+        <file>../svg/sendingIcon.svg</file>
+        <file>../svg/receivedIcon.svg</file>
+        <file>../svg/readIcon.svg</file>
+    </qresource>
+</RCC>

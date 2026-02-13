@@ -22,6 +22,8 @@ Kirigami.ApplicationWindow {
     property string selectedConversationName: ""
     property string selectedMeParticipantId: ""
     property string outgoingText: ""
+    property int statusVisibleIndex: -1
+    property int lastMessageCount: 0
 
     Component.onCompleted: {
         appState.initialize()
@@ -123,6 +125,8 @@ Kirigami.ApplicationWindow {
                                                 selectedConversationIndex = index
                                                 selectedConversationName = name
                                                 selectedMeParticipantId = conversationList.me_participant_id(index)
+                                                statusVisibleIndex = -1
+                                                lastMessageCount = 0
                                                 messageListModel.load(convoId)
                                             }
                                         }
@@ -250,6 +254,10 @@ Kirigami.ApplicationWindow {
                                     if (count > 0) {
                                         positionViewAtEnd()
                                     }
+                                    if (!messageListModel.loading && count > lastMessageCount) {
+                                        statusVisibleIndex = count - 1
+                                    }
+                                    lastMessageCount = count
                                 }
 
                                 Controls.ScrollBar.vertical: Controls.ScrollBar {
@@ -266,7 +274,13 @@ Kirigami.ApplicationWindow {
                                     required property string status
 
                                     width: messageList.width
-                                    height: messageRow.implicitHeight + metaRow.implicitHeight + Kirigami.Units.smallSpacing
+                                    height: messageRow.implicitHeight + metaContainer.height + Kirigami.Units.smallSpacing
+
+                                    TapHandler {
+                                        acceptedButtons: Qt.LeftButton
+                                        grabPermissions: PointerHandler.CanTakeOverFromAnything
+                                        onTapped: root.statusVisibleIndex = messageDelegate.index
+                                    }
 
                                     Row {
                                         id: messageRow
@@ -321,40 +335,55 @@ Kirigami.ApplicationWindow {
                                                 selectedTextColor: messageDelegate.from_me ? Kirigami.Theme.textColor : Kirigami.Theme.highlightedTextColor
                                                 selectionColor: messageDelegate.from_me ? Kirigami.Theme.backgroundColor : Kirigami.Theme.highlightColor
                                                 font.pointSize: Kirigami.Theme.defaultFont.pointSize
+
+                                                TapHandler {
+                                                    acceptedButtons: Qt.LeftButton
+                                                    onTapped: root.statusVisibleIndex = messageDelegate.index
+                                                }
                                             }
                                         }
                                     }
 
-                                    Row {
-                                        id: metaRow
+                                    Item {
+                                        id: metaContainer
 
                                         anchors.top: messageRow.bottom
                                         anchors.right: messageDelegate.from_me ? parent.right : undefined
                                         anchors.left: messageDelegate.from_me ? undefined : parent.left
                                         anchors.topMargin: Kirigami.Units.smallSpacing
-                                        spacing: Kirigami.Units.smallSpacing
+                                        height: messageDelegate.index === root.statusVisibleIndex ? metaRow.implicitHeight : 0
+                                        width: metaRow.implicitWidth
+                                        clip: true
 
-                                        Controls.Label {
-                                            text: time
-                                            color: Kirigami.Theme.disabledTextColor
-                                            font.pixelSize: Kirigami.Units.gridUnit * 0.8
-                                        }
-                                        Controls.Label {
-                                            text: "\u00B7"
-                                            color: Kirigami.Theme.disabledTextColor
-                                            font.pixelSize: Kirigami.Units.gridUnit * 0.8
-                                            visible: messageDelegate.from_me
-                                        }
-                                        Image {
-                                            width: 22
-                                            height: 12
-                                            fillMode: Image.PreserveAspectFit
-                                            visible: messageDelegate.from_me
-                                            source: messageDelegate.status === "read"
-                                                ? "qrc:/svg/readIcon.svg"
-                                                : messageDelegate.status === "received"
-                                                    ? "qrc:/svg/receivedIcon.svg"
-                                                    : "qrc:/svg/sentIcon.svg"
+                                        Row {
+                                            id: metaRow
+
+                                            spacing: Kirigami.Units.smallSpacing
+
+                                            Controls.Label {
+                                                text: time
+                                                color: Kirigami.Theme.disabledTextColor
+                                                font.pixelSize: Kirigami.Units.gridUnit * 0.8
+                                            }
+                                            Controls.Label {
+                                                text: "\u00B7"
+                                                color: Kirigami.Theme.disabledTextColor
+                                                font.pixelSize: Kirigami.Units.gridUnit * 0.8
+                                                visible: messageDelegate.from_me
+                                            }
+                                            Image {
+                                                width: 22
+                                                height: 12
+                                                fillMode: Image.PreserveAspectFit
+                                                visible: messageDelegate.from_me
+                                                source: messageDelegate.status === "read"
+                                                    ? "qrc:/svg/readIcon.svg"
+                                                    : messageDelegate.status === "received"
+                                                        ? "qrc:/svg/receivedIcon.svg"
+                                                        : messageDelegate.status === "sending"
+                                                            ? "qrc:/svg/sendingIcon.svg"
+                                                            : "qrc:/svg/sentIcon.svg"
+                                            }
                                         }
                                     }
                                 }
@@ -496,8 +525,8 @@ Kirigami.ApplicationWindow {
     Connections {
         target: sessionController
 
-        function onMessage_received(conversationId, participantId, body, transportType, messageId, timestampMicros) {
-            messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, timestampMicros)
+        function onMessage_received(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode) {
+            messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode)
         }
     }
 }

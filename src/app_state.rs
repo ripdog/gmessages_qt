@@ -361,27 +361,36 @@ impl crate::ffi::SessionController {
                                     let participant_id = message.participant_id.clone();
                                     let transport_type = message.r#type;
                                     let body_text = body.clone();
-                                    let request_id = if !message.message_id.is_empty() {
-                                        message.message_id.clone()
-                                    } else if !message.tmp_id.is_empty() {
-                                        message.tmp_id.clone()
-                                    } else {
-                                        message.another_message_id.as_ref().map(|id| id.message_id.clone()).unwrap_or_default()
-                                    };
+                                        let request_id = if !message.message_id.is_empty() {
+                                            message.message_id.clone()
+                                        } else if !message.tmp_id.is_empty() {
+                                            message.tmp_id.clone()
+                                        } else {
+                                            message.another_message_id.as_ref().map(|id| id.message_id.clone()).unwrap_or_default()
+                                        };
+
+                                        let tmp_id = message.tmp_id.clone();
+                                        let status_code = message
+                                            .message_status
+                                            .as_ref()
+                                            .map(|status| status.status)
+                                            .unwrap_or(0);
 
                                     let timestamp_micros = message.timestamp;
 
                                     let request_id_for_signal = request_id.clone();
-                                    let _ = session_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
-                                        qobject.as_mut().message_received(
-                                            &QString::from(conversation_id.clone()),
-                                            &QString::from(participant_id.clone()),
-                                            &QString::from(body_text.clone()),
-                                            transport_type,
-                                            &QString::from(request_id_for_signal.clone()),
-                                            timestamp_micros,
-                                        );
-                                    });
+                                        let _ = session_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
+                                            qobject.as_mut().message_received(
+                                                &QString::from(conversation_id.clone()),
+                                                &QString::from(participant_id.clone()),
+                                                &QString::from(body_text.clone()),
+                                                transport_type,
+                                                &QString::from(request_id_for_signal.clone()),
+                                                &QString::from(tmp_id.clone()),
+                                                timestamp_micros,
+                                                status_code,
+                                            );
+                                        });
 
                                     if !request_id.is_empty() {
                                         let client_clone = loop_handler.client();
@@ -745,6 +754,7 @@ fn map_message_status(status_code: i32, from_me: bool) -> &'static str {
     }
 
     match status_code {
+        5 | 6 | 7 => "sending",
         2 => "received",  // OUTGOING_DELIVERED
         11 => "read",     // OUTGOING_DISPLAYED
         _ => "sent",
@@ -1015,6 +1025,10 @@ impl crate::ffi::MessageList {
         let tmp_id = Uuid::new_v4().to_string().to_lowercase();
         let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
 
+        eprintln!(
+            "optimistic message insert: convo_id={conversation_id:?} tmp_id={tmp_id:?} body={body:?} timestamp_micros={now_micros}"
+        );
+
         self.as_mut().begin_reset_model();
         let mut rust = self.as_mut().rust_mut();
         rust.messages.push(MessageItem {
@@ -1041,6 +1055,10 @@ impl crate::ffi::MessageList {
             };
 
             let tmp_id_for_fail = tmp_id.clone();
+            let tmp_id_for_runtime = tmp_id.clone();
+            let tmp_id_for_log = tmp_id.clone();
+            let convo_id_for_log = conversation_id.clone();
+            let body_for_log = body.clone();
             let result: Result<(), String> = runtime.block_on(async move {
                 let store = AuthDataStore::default_store();
                 let auth = store
@@ -1115,12 +1133,19 @@ impl crate::ffi::MessageList {
                     .await
                     .map_err(|error| error.to_string())?;
 
+                eprintln!(
+                    "send_message success: convo_id={conversation_id:?} tmp_id={tmp_id_for_runtime:?} body={body:?}"
+                );
+
                 task.abort();
                 Ok(())
             });
 
             if let Err(error) = result {
                 eprintln!("message send failed: {error}");
+                eprintln!(
+                    "send_message failed: convo_id={convo_id_for_log:?} tmp_id={tmp_id_for_log:?} body={body_for_log:?}"
+                );
                 let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                     qobject.as_mut().begin_reset_model();
                     let mut rust = qobject.as_mut().rust_mut();
@@ -1141,7 +1166,9 @@ impl crate::ffi::MessageList {
         body: &QString,
         transport_type: i64,
         message_id: &QString,
+        tmp_id: &QString,
         timestamp_micros: i64,
+        status_code: i32,
     ) {
         let conversation_id = conversation_id.to_string();
         if conversation_id.is_empty() {
@@ -1156,37 +1183,57 @@ impl crate::ffi::MessageList {
             && participant_id == self.rust().me_participant_id;
 
         let message_id = message_id.to_string();
-        if !message_id.is_empty() {
-            if let Some(index) = self
-                .rust()
-                .messages
-                .iter()
-                .position(|item| item.message_id == message_id)
-            {
+        let tmp_id = tmp_id.to_string();
+        let body = body.to_string();
+
+        if from_me {
+            let mapped_status = map_message_status(status_code, from_me);
+            eprintln!(
+                "message echo received: convo_id={conversation_id:?} participant_id={participant_id:?} message_id={message_id:?} tmp_id={tmp_id:?} transport_type={transport_type} timestamp_micros={timestamp_micros} status_code={status_code} mapped_status={mapped_status:?} body={body:?}"
+            );
+        }
+        if !message_id.is_empty() || !tmp_id.is_empty() {
+            let index = self.rust().messages.iter().position(|item| {
+                (!message_id.is_empty() && item.message_id == message_id)
+                    || (!tmp_id.is_empty() && item.message_id == tmp_id)
+            });
+            if let Some(index) = index {
                 self.as_mut().begin_reset_model();
                 let mut rust = self.as_mut().rust_mut();
                 if let Some(item) = rust.messages.get_mut(index) {
-                    item.status = QString::from("sent");
+                    let next_status = map_message_status(status_code, from_me);
+                    if from_me {
+                        eprintln!(
+                            "echo matched optimistic: index={index} message_id={message_id:?} tmp_id={tmp_id:?} updating_status={next_status:?}"
+                        );
+                    }
+                    item.status = QString::from(next_status);
                 }
                 self.as_mut().end_reset_model();
                 return;
             }
         }
-
-        let body = body.to_string();
         if body.trim().is_empty() {
             return;
         }
 
+        if from_me {
+            let mapped_status = map_message_status(status_code, from_me);
+            eprintln!(
+                "echo insert new: convo_id={conversation_id:?} participant_id={participant_id:?} message_id={message_id:?} tmp_id={tmp_id:?} transport_type={transport_type} timestamp_micros={timestamp_micros} status_code={status_code} mapped_status={mapped_status:?} body={body:?}"
+            );
+        }
+
         self.as_mut().begin_reset_model();
         let mut rust = self.as_mut().rust_mut();
+        let status = map_message_status(status_code, from_me);
         let new_item = MessageItem {
             body: QString::from(body),
             from_me,
             transport_type,
             timestamp_micros,
             message_id,
-            status: QString::from("received"),
+            status: QString::from(status),
         };
         rust.messages.push(new_item);
         rust.messages.sort_by_key(|item| item.timestamp_micros);
