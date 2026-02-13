@@ -262,9 +262,11 @@ Kirigami.ApplicationWindow {
                                     required property int index
                                     required property string body
                                     required property bool from_me
+                                    required property string time
+                                    required property string status
 
                                     width: messageList.width
-                                    height: messageRow.implicitHeight
+                                    height: messageRow.implicitHeight + metaRow.implicitHeight + Kirigami.Units.smallSpacing
 
                                     Row {
                                         id: messageRow
@@ -320,6 +322,39 @@ Kirigami.ApplicationWindow {
                                                 selectionColor: messageDelegate.from_me ? Kirigami.Theme.backgroundColor : Kirigami.Theme.highlightColor
                                                 font.pointSize: Kirigami.Theme.defaultFont.pointSize
                                             }
+                                        }
+                                    }
+
+                                    Row {
+                                        id: metaRow
+
+                                        anchors.top: messageRow.bottom
+                                        anchors.right: messageDelegate.from_me ? parent.right : undefined
+                                        anchors.left: messageDelegate.from_me ? undefined : parent.left
+                                        anchors.topMargin: Kirigami.Units.smallSpacing
+                                        spacing: Kirigami.Units.smallSpacing
+
+                                        Controls.Label {
+                                            text: time
+                                            color: Kirigami.Theme.disabledTextColor
+                                            font.pixelSize: Kirigami.Units.gridUnit * 0.8
+                                        }
+                                        Controls.Label {
+                                            text: "\u00B7"
+                                            color: Kirigami.Theme.disabledTextColor
+                                            font.pixelSize: Kirigami.Units.gridUnit * 0.8
+                                            visible: messageDelegate.from_me
+                                        }
+                                        Image {
+                                            width: 22
+                                            height: 12
+                                            fillMode: Image.PreserveAspectFit
+                                            visible: messageDelegate.from_me
+                                            source: messageDelegate.status === "read"
+                                                ? "qrc:/svg/readIcon.svg"
+                                                : messageDelegate.status === "received"
+                                                    ? "qrc:/svg/receivedIcon.svg"
+                                                    : "qrc:/svg/sentIcon.svg"
                                         }
                                     }
                                 }

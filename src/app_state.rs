@@ -272,7 +272,6 @@ impl crate::ffi::SessionController {
 
             let status_thread = qt_thread.clone();
             let result: Result<(), String> = runtime.block_on(async move {
-                eprintln!("[session] start long-poll loop");
                 let store = AuthDataStore::default_store();
                 let auth = store
                     .load()
@@ -297,10 +296,8 @@ impl crate::ffi::SessionController {
                         true,
                     )
                     .await;
-                eprintln!("[session] primed GetUpdates");
 
                 let stream = handler.client().start_long_poll_stream().await.map_err(|error| error.to_string())?;
-                eprintln!("[session] long-poll stream started");
                 let mut skip_count: i32 = 0;
 
                 let loop_handler = handler.clone();
@@ -318,22 +315,17 @@ impl crate::ffi::SessionController {
                             Ok(payload) => payload,
                             Err(err) => return Err(libgmessages_rs::gmclient::SessionError::Client(err)),
                         };
-                        eprintln!("[session] payload received: data={} ack={} heartbeat={}", payload.data.is_some(), payload.ack.is_some(), payload.heartbeat.is_some());
                         if let Some(ack) = payload.ack.as_ref() {
                             if let Some(count) = ack.count {
                                 skip_count = count;
-                                eprintln!("[session] start ack count set to {skip_count}");
                             }
                         }
                         let Some(data) = payload.data.as_ref() else { continue; };
-                        eprintln!("[session] data route={} message_type={} response_id={}", data.bugle_route, data.message_type, data.response_id);
                         if skip_count > 0 {
                             skip_count -= 1;
-                            eprintln!("[session] skipping payload, remaining {skip_count}");
                             continue;
                         }
                         if data.bugle_route != libgmessages_rs::proto::rpc::BugleRoute::DataEvent as i32 {
-                            eprintln!("[session] ignored non-DataEvent route");
                             continue;
                         }
 
@@ -342,14 +334,9 @@ impl crate::ffi::SessionController {
                             .decode_update_events_from_message(data)
                             .await
                             .map_err(libgmessages_rs::gmclient::SessionError::from)?;
-                        if updates.is_none() {
-                            eprintln!("[session] update decode returned None");
-                        }
                         let Some(updates) = updates else { continue; };
-                        eprintln!("[session] update event decoded");
                         if let Some(event) = updates.event {
                             if let libgmessages_rs::proto::events::update_events::Event::MessageEvent(message_event) = event {
-                                eprintln!("[session] message event count={}", message_event.data.len());
                                 for message in message_event.data {
                                     let body = message
                                         .message_info
@@ -367,7 +354,6 @@ impl crate::ffi::SessionController {
                                         })
                                         .unwrap_or_default();
                                     if body.is_empty() {
-                                        eprintln!("[session] message skipped: empty body convo_id={}", message.conversation_id);
                                         continue;
                                     }
 
@@ -375,7 +361,6 @@ impl crate::ffi::SessionController {
                                     let participant_id = message.participant_id.clone();
                                     let transport_type = message.r#type;
                                     let body_text = body.clone();
-                                    eprintln!("[session] dispatch message convo_id={} participant_id={} type={}", conversation_id, participant_id, transport_type);
                                     let request_id = if !message.message_id.is_empty() {
                                         message.message_id.clone()
                                     } else if !message.tmp_id.is_empty() {
@@ -426,7 +411,6 @@ impl crate::ffi::SessionController {
                                 true,
                             )
                             .await;
-                        eprintln!("[session] GetUpdates tick");
                     }
                     Ok(())
                 });
@@ -721,6 +705,19 @@ fn format_human_timestamp(timestamp_micros: i64) -> String {
     format!("{}/{:02}/{:02}", time.day(), time.month(), year)
 }
 
+fn format_human_message_time(timestamp_micros: i64) -> String {
+    if timestamp_micros <= 0 {
+        return String::new();
+    }
+    let timestamp_millis = timestamp_micros / 1000;
+    let utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_millis);
+    let Some(utc_time) = utc else {
+        return String::new();
+    };
+    let time = utc_time.with_timezone(&Local);
+    format!("{:02}:{:02}", time.hour(), time.minute())
+}
+
 fn build_preview(convo: &libgmessages_rs::proto::conversations::Conversation) -> String {
     let Some(latest) = convo.latest_message.as_ref() else {
         return String::new();
@@ -742,12 +739,25 @@ fn build_preview(convo: &libgmessages_rs::proto::conversations::Conversation) ->
     format!("{prefix}{snippet}")
 }
 
+fn map_message_status(status_code: i32, from_me: bool) -> &'static str {
+    if !from_me {
+        return "received";
+    }
+
+    match status_code {
+        2 => "received",  // OUTGOING_DELIVERED
+        11 => "read",     // OUTGOING_DISPLAYED
+        _ => "sent",
+    }
+}
+
 pub struct MessageItem {
     body: QString,
     from_me: bool,
     transport_type: i64,
     timestamp_micros: i64,
     message_id: String,
+    status: QString,
 }
 
 pub struct MessageListRust {
@@ -786,6 +796,8 @@ impl crate::ffi::MessageList {
             2 => QVariant::from(&item.transport_type),
             3 => QVariant::from(&item.timestamp_micros),
             4 => QVariant::from(&QString::from(item.message_id.as_str())),
+            5 => QVariant::from(&item.status),
+            6 => QVariant::from(&QString::from(format_human_message_time(item.timestamp_micros))),
             _ => QVariant::default(),
         }
     }
@@ -797,6 +809,8 @@ impl crate::ffi::MessageList {
         roles.insert(2, "transport_type".into());
         roles.insert(3, "timestamp_micros".into());
         roles.insert(4, "message_id".into());
+        roles.insert(5, "status".into());
+        roles.insert(6, "time".into());
         roles
     }
 
@@ -929,6 +943,13 @@ impl crate::ffi::MessageList {
                         }
                         let from_me = !me_participant_id.is_empty()
                             && message.participant_id == me_participant_id;
+                        let status_code = message
+                            .message_status
+                            .as_ref()
+                            .map(|status| status.status)
+                            .unwrap_or(0);
+                        let status = map_message_status(status_code, from_me);
+                        println!("message status: {status:?} body: {body:?}");
                         let message_id = if !message.message_id.is_empty() {
                             message.message_id.clone()
                         } else if !message.tmp_id.is_empty() {
@@ -947,6 +968,7 @@ impl crate::ffi::MessageList {
                             transport_type: message.r#type,
                             timestamp_micros: message.timestamp,
                             message_id,
+                            status: QString::from(status),
                         })
                     })
                     .collect();
@@ -977,7 +999,7 @@ impl crate::ffi::MessageList {
         });
     }
 
-    pub fn send_message(self: Pin<&mut Self>, text: &QString) {
+    pub fn send_message(mut self: Pin<&mut Self>, text: &QString) {
         let body = text.to_string();
         let body = body.trim().to_string();
         if body.is_empty() {
@@ -988,6 +1010,23 @@ impl crate::ffi::MessageList {
         if conversation_id.is_empty() {
             return;
         }
+
+        let now_micros = chrono::Utc::now().timestamp_micros();
+        let tmp_id = Uuid::new_v4().to_string().to_lowercase();
+        let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
+
+        self.as_mut().begin_reset_model();
+        let mut rust = self.as_mut().rust_mut();
+        rust.messages.push(MessageItem {
+            body: QString::from(body.clone()),
+            from_me: true,
+            transport_type: 4,
+            timestamp_micros: now_micros,
+            message_id: tmp_id.clone(),
+            status: QString::from("sent"),
+        });
+        rust.messages.sort_by_key(|item| item.timestamp_micros);
+        self.as_mut().end_reset_model();
 
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -1001,6 +1040,7 @@ impl crate::ffi::MessageList {
                 }
             };
 
+            let tmp_id_for_fail = tmp_id.clone();
             let result: Result<(), String> = runtime.block_on(async move {
                 let store = AuthDataStore::default_store();
                 let auth = store
@@ -1035,7 +1075,6 @@ impl crate::ffi::MessageList {
                     )
                     .await;
 
-                let tmp_id = Uuid::new_v4().to_string().to_lowercase();
                 let message_info = libgmessages_rs::proto::conversations::MessageInfo {
                     action_message_id: None,
                     data: Some(
@@ -1082,6 +1121,14 @@ impl crate::ffi::MessageList {
 
             if let Err(error) = result {
                 eprintln!("message send failed: {error}");
+                let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                    qobject.as_mut().begin_reset_model();
+                    let mut rust = qobject.as_mut().rust_mut();
+                    if let Some(item) = rust.messages.iter_mut().find(|item| item.message_id == tmp_id_for_fail) {
+                        item.status = QString::from("failed");
+                    }
+                    qobject.as_mut().end_reset_model();
+                });
                 return;
             }
         });
@@ -1101,7 +1148,6 @@ impl crate::ffi::MessageList {
             return;
         }
         if conversation_id != self.rust().selected_conversation_id {
-            eprintln!("[message] ignored: convo_id {} != selected {}", conversation_id, self.rust().selected_conversation_id);
             return;
         }
 
@@ -1110,15 +1156,21 @@ impl crate::ffi::MessageList {
             && participant_id == self.rust().me_participant_id;
 
         let message_id = message_id.to_string();
-        if !message_id.is_empty()
-            && self
+        if !message_id.is_empty() {
+            if let Some(index) = self
                 .rust()
                 .messages
                 .iter()
-                .any(|item| item.message_id == message_id)
-        {
-            eprintln!("[message] duplicate ignored: message_id={message_id}");
-            return;
+                .position(|item| item.message_id == message_id)
+            {
+                self.as_mut().begin_reset_model();
+                let mut rust = self.as_mut().rust_mut();
+                if let Some(item) = rust.messages.get_mut(index) {
+                    item.status = QString::from("sent");
+                }
+                self.as_mut().end_reset_model();
+                return;
+            }
         }
 
         let body = body.to_string();
@@ -1126,7 +1178,6 @@ impl crate::ffi::MessageList {
             return;
         }
 
-        eprintln!("[message] append: convo_id={} from_me={} type={}", conversation_id, from_me, transport_type);
         self.as_mut().begin_reset_model();
         let mut rust = self.as_mut().rust_mut();
         let new_item = MessageItem {
@@ -1135,6 +1186,7 @@ impl crate::ffi::MessageList {
             transport_type,
             timestamp_micros,
             message_id,
+            status: QString::from("received"),
         };
         rust.messages.push(new_item);
         rust.messages.sort_by_key(|item| item.timestamp_micros);

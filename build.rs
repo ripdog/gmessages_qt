@@ -5,5 +5,6 @@ fn main() {
         QmlModule::new("org.gmessages_qt").qml_files(&["src/qml/Main.qml"]),
     )
     .files(["src/lib.rs"])
+    .qrc("src/qml/resources.qrc")
     .build();
 }
