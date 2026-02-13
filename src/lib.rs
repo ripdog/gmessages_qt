@@ -41,6 +41,9 @@ mod ffi {
 
         #[qinvokable]
         fn initialize(self: Pin<&mut AppState>);
+
+        #[qinvokable]
+        fn logout(self: Pin<&mut AppState>, reason: &QString);
     }
 
     impl cxx_qt::Threading for AppState {}
@@ -106,6 +109,9 @@ mod ffi {
         #[qinvokable]
         fn me_participant_id(self: &ConversationList, row: i32) -> QString;
 
+        #[qsignal]
+        fn auth_error(self: Pin<&mut ConversationList>, message: &QString);
+
         #[inherit]
         #[rust_name = "begin_reset_model"]
         fn beginResetModel(self: Pin<&mut Self>);
@@ -151,6 +157,9 @@ mod ffi {
             timestamp_micros: i64,
             status_code: i32,
         );
+
+        #[qsignal]
+        fn auth_error(self: Pin<&mut MessageList>, message: &QString);
 
         #[inherit]
         #[rust_name = "begin_reset_model"]

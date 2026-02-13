@@ -13,6 +13,7 @@ use libgmessages_rs::{
 use futures_util::StreamExt;
 use qrcode::render::svg;
 use qrcode::QrCode;
+use std::collections::HashMap;
 use std::time::Duration;
 use uuid::Uuid;
 use crate::ffi::QHash_i32_QByteArray;
@@ -59,6 +60,9 @@ impl Default for SessionControllerRust {
 pub struct ConversationItem {
     name: QString,
     preview: QString,
+    avatar_url: QString,
+    avatar_identifier: String,
+    is_group_chat: bool,
     conversation_id: String,
     me_participant_id: String,
     last_message_timestamp: i64,
@@ -70,6 +74,7 @@ pub struct ConversationListRust {
     filtered_items: Vec<ConversationItem>,
     filter_text: String,
     pub loading: bool,
+    avatar_by_identifier: HashMap<String, String>,
 }
 
 impl Default for ConversationListRust {
@@ -79,6 +84,7 @@ impl Default for ConversationListRust {
             filtered_items: Vec::new(),
             filter_text: String::new(),
             loading: false,
+            avatar_by_identifier: HashMap::new(),
         }
     }
 }
@@ -155,18 +161,30 @@ impl crate::ffi::AppState {
                             .set_status_message(QString::from("Scan the QR code"));
                     });
 
-                    let paired = client
-                        .wait_for_qr_pairing_on_stream(stream, Duration::from_secs(20))
-                        .await
-                        .map_err(|error| error.to_string())?;
+                    let paired = tokio::time::timeout(
+                        Duration::from_secs(20),
+                        client.wait_for_qr_pairing_on_stream(stream, Duration::from_secs(20)),
+                    )
+                    .await;
 
-                    if let Some(_) = paired {
-                        let auth_handle = client.auth();
-                        let auth = auth_handle.lock().await;
-                        store
-                            .save(&auth)
-                            .map_err(|error| error.to_string())?;
-                        return Ok(true);
+                    match paired {
+                        Ok(Ok(Some(_))) => {
+                            let auth_handle = client.auth();
+                            let auth = auth_handle.lock().await;
+                            store
+                                .save(&auth)
+                                .map_err(|error| error.to_string())?;
+                            return Ok(true);
+                        }
+                        Ok(Ok(None)) => {
+                            continue;
+                        }
+                        Ok(Err(error)) => {
+                            return Err(error.to_string());
+                        }
+                        Err(_) => {
+                            continue;
+                        }
                     }
                 }
             });
@@ -235,6 +253,26 @@ impl crate::ffi::AppState {
                     });
                 }
             }
+        });
+    }
+
+    pub fn logout(self: Pin<&mut Self>, reason: &QString) {
+        let message = reason.to_string();
+        let qt_thread: CxxQtThread<ffi::AppState> = self.qt_thread();
+        std::thread::spawn(move || {
+            let store = AuthDataStore::default_store();
+            if let Err(error) = store.delete() {
+                eprintln!("auth delete failed: {error}");
+            }
+            let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::AppState>| {
+                qobject.as_mut().set_logged_in(false);
+                qobject.as_mut().set_login_in_progress(false);
+                if message.is_empty() {
+                    qobject.as_mut().set_status_message(QString::from("Not logged in"));
+                } else {
+                    qobject.as_mut().set_status_message(QString::from(message.as_str()));
+                }
+            });
         });
     }
 }
@@ -478,6 +516,8 @@ impl crate::ffi::ConversationList {
             0 => QVariant::from(&item.name),
             1 => QVariant::from(&item.preview),
             2 => QVariant::from(&item.last_message_time),
+            3 => QVariant::from(&item.avatar_url),
+            4 => QVariant::from(&item.is_group_chat),
             _ => QVariant::default(),
         }
     }
@@ -487,12 +527,15 @@ impl crate::ffi::ConversationList {
         roles.insert(0, "name".into());
         roles.insert(1, "preview".into());
         roles.insert(2, "time".into());
+        roles.insert(3, "avatar_url".into());
+        roles.insert(4, "is_group_chat".into());
         roles
     }
 
     pub fn load(mut self: Pin<&mut Self>) {
         self.as_mut().set_loading(true);
         let qt_thread: CxxQtThread<ffi::ConversationList> = self.qt_thread();
+        let ui_thread = qt_thread.clone();
 
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -506,7 +549,7 @@ impl crate::ffi::ConversationList {
                 }
             };
 
-            let result: Result<Vec<ConversationItem>, String> = runtime.block_on(async move {
+            let result: Result<(), String> = runtime.block_on(async move {
                 let store = AuthDataStore::default_store();
                 let auth = store
                     .load()
@@ -563,6 +606,7 @@ impl crate::ffi::ConversationList {
                         let preview = QString::from(build_preview(&convo));
                         let name = QString::from(convo.name);
                         let conversation_id = convo.conversation_id;
+                        let is_group_chat = convo.is_group_chat;
                         let me_participant_id = convo
                             .participants
                             .iter()
@@ -579,10 +623,29 @@ impl crate::ffi::ConversationList {
                             .unwrap_or_default();
                         let last_message_timestamp = convo.last_message_timestamp;
                         let last_message_time = QString::from(format_human_timestamp(last_message_timestamp));
+                        let avatar_identifier = convo
+                            .participants
+                            .iter()
+                            .find_map(|participant| {
+                                if participant.is_me {
+                                    None
+                                } else if !participant.contact_id.is_empty() {
+                                    Some(participant.contact_id.clone())
+                                } else {
+                                    participant
+                                        .id
+                                        .as_ref()
+                                        .map(|id| id.participant_id.clone())
+                                }
+                            })
+                            .unwrap_or_default();
 
                         ConversationItem {
                             name,
                             preview,
+                            avatar_url: QString::from(""),
+                            avatar_identifier,
+                            is_group_chat,
                             conversation_id,
                             me_participant_id,
                             last_message_timestamp,
@@ -593,26 +656,106 @@ impl crate::ffi::ConversationList {
 
                 items.sort_by(|left, right| right.last_message_timestamp.cmp(&left.last_message_timestamp));
 
-                Ok(items)
+                let mut avatar_identifiers: Vec<String> = Vec::new();
+                let mut avatar_by_identifier: HashMap<String, String> = HashMap::new();
+                for item in &items {
+                    if item.avatar_identifier.is_empty() {
+                        continue;
+                    }
+                    if avatar_by_identifier.contains_key(&item.avatar_identifier) {
+                        continue;
+                    }
+                    avatar_identifiers.push(item.avatar_identifier.clone());
+                    avatar_by_identifier.insert(item.avatar_identifier.clone(), String::new());
+                }
+
+                let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                    qobject.as_mut().begin_reset_model();
+                    let mut rust = qobject.as_mut().rust_mut();
+                    rust.avatar_by_identifier.clear();
+                    rust.all_items = items;
+                    rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
+                    qobject.as_mut().set_loading(false);
+                    qobject.as_mut().end_reset_model();
+                });
+
+                if !avatar_identifiers.is_empty() {
+                    let request = libgmessages_rs::proto::client::GetThumbnailRequest {
+                        identifiers: avatar_identifiers.clone(),
+                    };
+                    let attempts = [
+                        (true, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
+                        (true, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
+                        (false, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
+                        (false, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
+                        (false, libgmessages_rs::proto::rpc::MessageType::UnknownMessageType),
+                    ];
+                    for (encrypted, message_type) in attempts {
+                        let attempt: Result<libgmessages_rs::proto::client::GetThumbnailResponse, _> = if encrypted {
+                            handler.send_request(
+                                libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail,
+                                message_type,
+                                &request,
+                            ).await
+                        } else {
+                            handler
+                                .send_request_dont_encrypt(
+                                    libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail,
+                                    message_type,
+                                    &request,
+                                    Duration::from_secs(5),
+                                )
+                                .await
+                        };
+                        if let Ok(response) = attempt {
+                            if response.thumbnail.is_empty() {
+                                continue;
+                            }
+                            for thumb in response.thumbnail {
+                                if let Some(data) = thumb.data.as_ref() {
+                                    if data.image_buffer.is_empty() {
+                                        continue;
+                                    }
+                                    let ext = detect_extension(&data.image_buffer);
+                                    let encoded = STANDARD.encode(&data.image_buffer);
+                                    let url = format!("data:image/{ext};base64,{encoded}");
+                                    avatar_by_identifier.insert(thumb.identifier, url);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                if !avatar_by_identifier.is_empty() {
+                    let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                        let mut rust = qobject.as_mut().rust_mut();
+                        let avatar_by_identifier = avatar_by_identifier;
+                        rust.avatar_by_identifier = avatar_by_identifier.clone();
+                        for item in &mut rust.all_items {
+                            if let Some(url) = avatar_by_identifier.get(&item.avatar_identifier) {
+                                if !url.is_empty() {
+                                    item.avatar_url = QString::from(url.as_str());
+                                }
+                            }
+                        }
+                        rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
+                    });
+                }
+
+                Ok(())
             });
 
-            match result {
-                Ok(items) => {
-                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
-                        qobject.as_mut().begin_reset_model();
-                        let mut rust = qobject.as_mut().rust_mut();
-                        rust.all_items = items;
-                        rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
-                        qobject.as_mut().set_loading(false);
-                        qobject.as_mut().end_reset_model();
-                    });
-                }
-                Err(error) => {
-                    eprintln!("conversation load failed: {error}");
-                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
-                        qobject.as_mut().set_loading(false);
-                    });
-                }
+            if let Err(error) = result {
+                let is_auth_error = error.contains("authentication credential") || error.contains("401");
+                eprintln!("conversation load failed: {error}");
+                let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                    qobject.as_mut().rust_mut().avatar_by_identifier.clear();
+                    qobject.as_mut().set_loading(false);
+                    if is_auth_error {
+                        qobject.as_mut().auth_error(&QString::from(error.as_str()));
+                    }
+                });
             }
         });
     }
@@ -748,6 +891,20 @@ fn build_preview(convo: &libgmessages_rs::proto::conversations::Conversation) ->
     format!("{prefix}{snippet}")
 }
 
+fn detect_extension(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "png"
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        "jpg"
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        "gif"
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "webp"
+    } else {
+        "bin"
+    }
+}
+
 fn map_message_status(status_code: i32, from_me: bool) -> &'static str {
     if !from_me {
         return "received";
@@ -833,6 +990,7 @@ impl crate::ffi::MessageList {
         self.as_mut().begin_reset_model();
         let mut rust = self.as_mut().rust_mut();
         rust.messages.clear();
+        rust.messages.shrink_to_fit();
         rust.selected_conversation_id = conversation_id.clone();
         rust.me_participant_id.clear();
         self.as_mut().end_reset_model();
@@ -991,18 +1149,23 @@ impl crate::ffi::MessageList {
             match result {
                 Ok((messages, me_participant_id)) => {
                     let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
-                        qobject.as_mut().begin_reset_model();
-                        let mut rust = qobject.as_mut().rust_mut();
-                        rust.messages = messages;
-                        rust.me_participant_id = me_participant_id;
-                        qobject.as_mut().set_loading(false);
-                        qobject.as_mut().end_reset_model();
-                    });
+                    qobject.as_mut().begin_reset_model();
+                    let mut rust = qobject.as_mut().rust_mut();
+                    rust.messages = messages;
+                    rust.messages.shrink_to_fit();
+                    rust.me_participant_id = me_participant_id;
+                    qobject.as_mut().set_loading(false);
+                    qobject.as_mut().end_reset_model();
+                });
                 }
                 Err(error) => {
+                    let is_auth_error = error.contains("authentication credential") || error.contains("401");
                     eprintln!("message load failed: {error}");
                     let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                         qobject.as_mut().set_loading(false);
+                        if is_auth_error {
+                            qobject.as_mut().auth_error(&QString::from(error.as_str()));
+                        }
                     });
                 }
             }
@@ -1037,7 +1200,7 @@ impl crate::ffi::MessageList {
             transport_type: 4,
             timestamp_micros: now_micros,
             message_id: tmp_id.clone(),
-            status: QString::from("sent"),
+            status: QString::from("sending"),
         });
         rust.messages.sort_by_key(|item| item.timestamp_micros);
         self.as_mut().end_reset_model();
@@ -1146,6 +1309,12 @@ impl crate::ffi::MessageList {
                 eprintln!(
                     "send_message failed: convo_id={convo_id_for_log:?} tmp_id={tmp_id_for_log:?} body={body_for_log:?}"
                 );
+                if error.contains("authentication credential") || error.contains("401") {
+                    let store = AuthDataStore::default_store();
+                    if let Err(error) = store.delete() {
+                        eprintln!("auth delete failed: {error}");
+                    }
+                }
                 let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                     qobject.as_mut().begin_reset_model();
                     let mut rust = qobject.as_mut().rust_mut();
