@@ -63,6 +63,7 @@ pub struct ConversationItem {
     avatar_url: QString,
     avatar_identifier: String,
     is_group_chat: bool,
+    unread: bool,
     conversation_id: String,
     me_participant_id: String,
     last_message_timestamp: i64,
@@ -518,6 +519,7 @@ impl crate::ffi::ConversationList {
             2 => QVariant::from(&item.last_message_time),
             3 => QVariant::from(&item.avatar_url),
             4 => QVariant::from(&item.is_group_chat),
+            5 => QVariant::from(&item.unread),
             _ => QVariant::default(),
         }
     }
@@ -529,6 +531,7 @@ impl crate::ffi::ConversationList {
         roles.insert(2, "time".into());
         roles.insert(3, "avatar_url".into());
         roles.insert(4, "is_group_chat".into());
+        roles.insert(5, "unread".into());
         roles
     }
 
@@ -607,6 +610,7 @@ impl crate::ffi::ConversationList {
                         let name = QString::from(convo.name);
                         let conversation_id = convo.conversation_id;
                         let is_group_chat = convo.is_group_chat;
+                        let unread = convo.unread;
                         let me_participant_id = convo
                             .participants
                             .iter()
@@ -646,6 +650,7 @@ impl crate::ffi::ConversationList {
                             avatar_url: QString::from(""),
                             avatar_identifier,
                             is_group_chat,
+                            unread,
                             conversation_id,
                             me_participant_id,
                             last_message_timestamp,
