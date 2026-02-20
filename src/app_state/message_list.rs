@@ -1,3 +1,4 @@
+#![allow(clippy::drop_non_drop)]
 use crate::ffi;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -134,11 +135,8 @@ impl crate::ffi::MessageList {
 
         spawn(async move {
             let result: Result<(Vec<MessageItem>, String, Vec<(String, String, Vec<u8>, String)>, Vec<String>, Vec<(String, String)>), String> = async {
-                eprintln!("[{}] MessageList: Start load", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 let client = ensure_client().await?;
-                eprintln!("[{}] MessageList: ensured client", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 let handler = make_handler(&client).await?;
-                eprintln!("[{}] MessageList: made handler", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
 
                 let request = libgmessages_rs::proto::client::ListMessagesRequest {
                     conversation_id: conversation_id.clone(),
@@ -151,7 +149,6 @@ impl crate::ffi::MessageList {
                         libgmessages_rs::proto::rpc::MessageType::BugleMessage,
                         &request,
                     ).await;
-                    eprintln!("[{}] MessageList: req_msgs finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                     res
                 };
 
@@ -165,14 +162,11 @@ impl crate::ffi::MessageList {
                         libgmessages_rs::proto::rpc::MessageType::BugleMessage,
                         &convo_request,
                     ).await;
-                    eprintln!("[{}] MessageList: req_convo finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                     res
                 };
 
                 let (response, convo_response) = tokio::try_join!(req_msgs, req_convo)
                     .map_err(|e| e.to_string())?;
-
-                eprintln!("[{}] MessageList: Network requests finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
 
                 let mut me_participant_id = String::new();
                 let mut avatar_identifiers: Vec<(String, String)> = Vec::new();
@@ -273,7 +267,6 @@ impl crate::ffi::MessageList {
                     }
                 }
 
-                eprintln!("[{}] MessageList: Pre-processing finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 Ok((messages, me_participant_id, media_downloads, identifiers_to_fetch, avatar_identifiers))
             }
             .await;
@@ -293,7 +286,6 @@ impl crate::ffi::MessageList {
                                     qobject.as_mut().begin_reset_model();
                                     qobject.as_mut().set_loading(false);
                                     qobject.as_mut().end_reset_model();
-                                    eprintln!("[{}] MessageList: UI updated (first load)", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                                 } else {
                                     // Set loading down immediately
                                     drop(rust);
@@ -355,7 +347,6 @@ impl crate::ffi::MessageList {
                             } else {
                                 rust.cache.insert(convo_id.clone(), (new_messages, me_participant_id));
                             }
-                            eprintln!("[{}] MessageList: UI updated (diffed)", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                         },
                     );
 
@@ -418,7 +409,6 @@ impl crate::ffi::MessageList {
                                             let model_index = qobject.as_ref().index(pos, 0, &QModelIndex::default());
                                             qobject.as_mut().data_changed(&model_index, &model_index);
                                         }
-                                        eprintln!("[{}] MessageList: Async avatars updated UI", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                                     }
                                 });
                             }

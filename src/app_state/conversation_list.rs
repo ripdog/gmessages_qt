@@ -88,7 +88,6 @@ impl crate::ffi::ConversationList {
 
         spawn(async move {
             let result: Result<(), String> = async {
-                eprintln!("[{}] ConversationList: Start load", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 let client = ensure_client().await?;
                 let handler = make_handler(&client).await?;
 
@@ -109,8 +108,6 @@ impl crate::ffi::ConversationList {
                         )
                         .await
                         .map_err(|e| e.to_string())?;
-
-                eprintln!("[{}] ConversationList: Request finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
 
                 let mut items: Vec<ConversationItem> = response
                     .conversations
@@ -147,7 +144,6 @@ impl crate::ffi::ConversationList {
                     rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
                     qobject.as_mut().set_loading(false);
                     qobject.as_mut().end_reset_model();
-                    eprintln!("[{}] ConversationList: UI updated", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 });
 
                 // Fetch missing avatars in background
@@ -172,7 +168,6 @@ impl crate::ffi::ConversationList {
                                 }
                                 rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
                                 qobject.as_mut().end_reset_model();
-                                eprintln!("[{}] ConversationList: Async avatars updated UI", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                             });
                         }
                     });

@@ -5,6 +5,9 @@ authors = [ "ripdog" ]
 edition = "2021"
 license = "BSD-2-Clause"
 
+[lib]
+test = false
+
 [dependencies]
 cxx = "1.0.122"
 cxx-qt = "0.8.0"
