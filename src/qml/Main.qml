@@ -29,6 +29,17 @@ Kirigami.ApplicationWindow {
     property int statusVisibleIndex: -1
     property int lastMessageCount: 0
     property string pendingConversationFilter: ""
+    property bool userAtBottom: true
+
+    // ── Helper: send current message ─────────────────────────────
+    function doSendMessage() {
+        if (root.outgoingText.trim().length > 0) {
+            root.messageListModel.send_message(root.outgoingText)
+            root.outgoingText = ""
+            root.messageListModel.send_typing(false)
+            typingDebounce.stop()
+        }
+    }
 
     // ── pageStack configuration ──────────────────────────────────
     pageStack {
@@ -38,6 +49,7 @@ Kirigami.ApplicationWindow {
             : Kirigami.ColumnView.SingleColumn
         globalToolBar {
             style: Kirigami.ApplicationHeaderStyle.ToolBar
+            canContainHandles: true
             showNavigationButtons: root.pageStack.currentIndex > 0
                 ? Kirigami.ApplicationHeaderStyle.ShowBackButton
                 : 0
@@ -85,6 +97,26 @@ Kirigami.ApplicationWindow {
             Kirigami.ColumnView.minimumWidth: Kirigami.Units.gridUnit * 16
             Kirigami.ColumnView.maximumWidth: Kirigami.Units.gridUnit * 26
             Kirigami.ColumnView.preferredWidth: Kirigami.Units.gridUnit * 22
+            Kirigami.ColumnView.interactiveResizeEnabled: true
+
+            // Page actions (refresh + logout)
+            actions: [
+                Kirigami.Action {
+                    icon.name: "view-refresh"
+                    text: "Refresh"
+                    onTriggered: root.conversationList.load()
+                },
+                Kirigami.Action {
+                    icon.name: "system-log-out"
+                    text: "Log out"
+                    onTriggered: {
+                        root.selectedConversationIndex = -1
+                        root.selectedConversationName = ""
+                        root.sessionController.stop()
+                        root.appState.logout("")
+                    }
+                }
+            ]
 
             // Search bar in the header
             header: Controls.ToolBar {
@@ -119,6 +151,7 @@ Kirigami.ApplicationWindow {
                         required property int index
                         required property string name
                         required property string preview
+                        required property string time
                         required property string avatar_url
                         required property bool is_group_chat
                         required property bool unread
@@ -133,6 +166,7 @@ Kirigami.ApplicationWindow {
                             root.selectedMeParticipantId = root.conversationList.me_participant_id(conversationDelegate.index)
                             root.statusVisibleIndex = -1
                             root.lastMessageCount = 0
+                            root.conversationList.mark_conversation_read(convoId)
                             root.messageListModel.load(convoId)
 
                             // Push the conversation page if not already shown
@@ -145,44 +179,54 @@ Kirigami.ApplicationWindow {
                         contentItem: RowLayout {
                             spacing: Kirigami.Units.largeSpacing
 
-                            // Avatar
-                            Item {
+                            // Avatar (circular clip)
+                            Rectangle {
                                 Layout.preferredWidth: Kirigami.Units.gridUnit * 2.5
                                 Layout.preferredHeight: Kirigami.Units.gridUnit * 2.5
+                                radius: width / 2
+                                color: Kirigami.Theme.alternateBackgroundColor
+                                clip: true
 
                                 Image {
                                     anchors.fill: parent
                                     source: conversationDelegate.avatar_url
                                     fillMode: Image.PreserveAspectCrop
                                     visible: conversationDelegate.avatar_url.length > 0
-
-                                    layer.enabled: true
-                                    layer.effect: Item {
-                                        property var source
-                                        ShaderEffect {
-                                            anchors.fill: parent
-                                            property var src: source
-                                        }
-                                    }
                                 }
                                 Kirigami.Icon {
                                     anchors.fill: parent
+                                    anchors.margins: Kirigami.Units.smallSpacing
                                     source: conversationDelegate.is_group_chat ? "group" : "user-identity"
                                     visible: conversationDelegate.avatar_url.length === 0
                                 }
                             }
 
-                            // Name + preview
+                            // Name + preview + timestamp
                             ColumnLayout {
                                 spacing: 0
                                 Layout.fillWidth: true
 
-                                Controls.Label {
-                                    text: conversationDelegate.name
-                                    elide: Text.ElideRight
-                                    font.weight: conversationDelegate.unread ? Font.Bold : Font.Normal
-                                    textFormat: Text.PlainText
+                                RowLayout {
                                     Layout.fillWidth: true
+                                    spacing: Kirigami.Units.smallSpacing
+
+                                    Controls.Label {
+                                        text: conversationDelegate.name
+                                        elide: Text.ElideRight
+                                        font.weight: conversationDelegate.unread ? Font.Bold : Font.Normal
+                                        textFormat: Text.PlainText
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Controls.Label {
+                                        text: conversationDelegate.time
+                                        font: Kirigami.Theme.smallFont
+                                        color: conversationDelegate.unread
+                                            ? Kirigami.Theme.highlightColor
+                                            : Kirigami.Theme.disabledTextColor
+                                        textFormat: Text.PlainText
+                                        visible: conversationDelegate.time.length > 0
+                                    }
                                 }
 
                                 Controls.Label {
@@ -252,6 +296,7 @@ Kirigami.ApplicationWindow {
 
                         anchors.fill: parent
                         anchors.margins: Kirigami.Units.largeSpacing
+                        anchors.rightMargin: Kirigami.Units.largeSpacing + Kirigami.Units.gridUnit
                         model: root.messageListModel
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -260,8 +305,38 @@ Kirigami.ApplicationWindow {
                         spacing: Kirigami.Units.mediumSpacing
                         visible: !root.messageListModel.loading && root.selectedConversationIndex >= 0
 
+                        // Date section headers
+                        section.property: "section_date"
+                        section.delegate: Item {
+                            required property string section
+                            width: ListView.view ? ListView.view.width : 0
+                            height: sectionLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
+
+                            Controls.Label {
+                                id: sectionLabel
+                                anchors.centerIn: parent
+                                text: parent.section
+                                font: Kirigami.Theme.smallFont
+                                color: Kirigami.Theme.disabledTextColor
+
+                                background: Rectangle {
+                                    color: Kirigami.Theme.backgroundColor
+                                    radius: height / 2
+                                    x: -Kirigami.Units.largeSpacing
+                                    y: -Math.round(Kirigami.Units.smallSpacing / 2)
+                                    width: sectionLabel.implicitWidth + Kirigami.Units.largeSpacing * 2
+                                    height: sectionLabel.implicitHeight + Kirigami.Units.smallSpacing
+                                }
+                            }
+                        }
+
+                        // Smart scroll: only auto-scroll when user is already at the bottom
+                        onContentYChanged: {
+                            root.userAtBottom = atYEnd
+                        }
+
                         onCountChanged: {
-                            if (count > 0) {
+                            if (count > 0 && root.userAtBottom) {
                                 positionViewAtEnd()
                             }
                             if (!root.messageListModel.loading && count > root.lastMessageCount) {
@@ -270,11 +345,36 @@ Kirigami.ApplicationWindow {
                             root.lastMessageCount = count
                         }
 
+                        // When model resets (new conversation loaded), always scroll to bottom
+                        Connections {
+                            target: root.messageListModel
+                            function onLoadingChanged() {
+                                if (!root.messageListModel.loading && messageList.count > 0) {
+                                    root.userAtBottom = true
+                                    messageList.positionViewAtEnd()
+                                }
+                            }
+                        }
+
                         Controls.ScrollBar.vertical: Controls.ScrollBar {
                             policy: Controls.ScrollBar.AsNeeded
                         }
 
                         delegate: messageDelegateComponent
+                    }
+
+                    // Jump-to-bottom button
+                    Controls.RoundButton {
+                        anchors.bottom: parent.bottom
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottomMargin: Kirigami.Units.largeSpacing
+                        icon.name: "go-down"
+                        visible: !root.userAtBottom && messageList.visible && messageList.count > 0
+                        onClicked: {
+                            messageList.positionViewAtEnd()
+                            root.userAtBottom = true
+                        }
+                        z: 1
                     }
 
                     Controls.BusyIndicator {
@@ -299,33 +399,54 @@ Kirigami.ApplicationWindow {
                     visible: root.selectedConversationIndex >= 0
                 }
 
-                // Send bar
+                // Send bar (multi-line TextArea)
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.margins: Kirigami.Units.largeSpacing
                     spacing: Kirigami.Units.largeSpacing
                     visible: root.selectedConversationIndex >= 0 && !root.messageListModel.loading
 
-                    Controls.TextField {
-                        id: sendField
-                        placeholderText: "Type a message…"
+                    Controls.ScrollView {
                         Layout.fillWidth: true
-                        text: root.outgoingText
-                        onTextChanged: root.outgoingText = text
-                        onAccepted: {
-                            if (root.outgoingText.trim().length > 0) {
-                                root.messageListModel.send_message(root.outgoingText)
-                                root.outgoingText = ""
+                        Layout.maximumHeight: Kirigami.Units.gridUnit * 8
+
+                        Controls.TextArea {
+                            id: sendField
+                            placeholderText: "Type a message…"
+                            wrapMode: TextEdit.Wrap
+                            text: root.outgoingText
+                            onTextChanged: {
+                                root.outgoingText = text
+                                // Send typing indicator with debounce
+                                if (text.trim().length > 0) {
+                                    if (!typingDebounce.running) {
+                                        root.messageListModel.send_typing(true)
+                                    }
+                                    typingDebounce.restart()
+                                } else {
+                                    root.messageListModel.send_typing(false)
+                                    typingDebounce.stop()
+                                }
+                            }
+                            Keys.onReturnPressed: function(event) {
+                                if (event.modifiers & Qt.ShiftModifier) {
+                                    // Shift+Enter: insert newline
+                                    event.accepted = false
+                                } else {
+                                    // Enter: send message
+                                    event.accepted = true
+                                    root.doSendMessage()
+                                }
                             }
                         }
                     }
                     Controls.Button {
                         icon.name: "document-send"
                         text: "Send"
+                        Layout.alignment: Qt.AlignBottom
                         enabled: root.outgoingText.trim().length > 0
                         onClicked: {
-                            root.messageListModel.send_message(root.outgoingText)
-                            root.outgoingText = ""
+                            root.doSendMessage()
                             sendField.forceActiveFocus()
                         }
                     }
@@ -346,23 +467,44 @@ Kirigami.ApplicationWindow {
             required property bool from_me
             required property string time
             required property string status
+            required property string section_date
+            required property string media_url
+            required property bool is_media
 
             width: ListView.view ? ListView.view.width : 0
             height: messageCol.implicitHeight
+
+            readonly property bool isFailed: messageDelegate.status === "failed"
 
             ColumnLayout {
                 id: messageCol
                 width: parent.width
                 spacing: Kirigami.Units.smallSpacing
 
-                // Bubble row
+                // Bubble row with avatar
                 RowLayout {
                     Layout.fillWidth: true
                     layoutDirection: messageDelegate.from_me ? Qt.RightToLeft : Qt.LeftToRight
                     spacing: Kirigami.Units.smallSpacing
 
-                    // Spacer to limit bubble width
-                    Item { Layout.fillWidth: true; Layout.maximumWidth: parent.width * 0.2 }
+                    // Avatar circle
+                    Rectangle {
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 1.5
+                        Layout.preferredHeight: Kirigami.Units.gridUnit * 1.5
+                        Layout.alignment: Qt.AlignBottom
+                        radius: width / 2
+                        color: messageDelegate.from_me
+                            ? Kirigami.Theme.highlightColor
+                            : Kirigami.Theme.disabledTextColor
+
+                        Controls.Label {
+                            anchors.centerIn: parent
+                            text: messageDelegate.from_me ? "Me" : "?"
+                            color: "white"
+                            font.pixelSize: Math.round(parent.height * 0.45)
+                            font.bold: true
+                        }
+                    }
 
                     Rectangle {
                         id: bubble
@@ -370,41 +512,72 @@ Kirigami.ApplicationWindow {
                         Layout.maximumWidth: messageCol.width * 0.75
                         Layout.minimumWidth: Kirigami.Units.gridUnit * 3
                         implicitWidth: Math.min(
-                            bubbleText.implicitWidth + Kirigami.Units.gridUnit * 1.5,
+                            bubbleContent.implicitWidth + Kirigami.Units.gridUnit * 1.5,
                             messageCol.width * 0.75
                         )
-                        implicitHeight: bubbleText.implicitHeight + Kirigami.Units.gridUnit * 1
+                        implicitHeight: bubbleContent.implicitHeight + Kirigami.Units.gridUnit * 1
                         radius: Kirigami.Units.gridUnit * 0.5
-                        color: messageDelegate.from_me
-                            ? Kirigami.Theme.highlightColor
-                            : Kirigami.Theme.alternateBackgroundColor
-                        border.width: messageDelegate.from_me ? 0 : 1
-                        border.color: messageDelegate.from_me
-                            ? "transparent"
-                            : Qt.rgba(
-                                Kirigami.Theme.textColor.r,
-                                Kirigami.Theme.textColor.g,
-                                Kirigami.Theme.textColor.b,
-                                0.15)
+                        color: messageDelegate.isFailed
+                            ? Qt.rgba(Kirigami.Theme.negativeTextColor.r,
+                                      Kirigami.Theme.negativeTextColor.g,
+                                      Kirigami.Theme.negativeTextColor.b, 0.15)
+                            : messageDelegate.from_me
+                                ? Kirigami.Theme.highlightColor
+                                : Kirigami.Theme.alternateBackgroundColor
+                        border.width: messageDelegate.isFailed ? 1
+                            : messageDelegate.from_me ? 0 : 1
+                        border.color: messageDelegate.isFailed
+                            ? Kirigami.Theme.negativeTextColor
+                            : messageDelegate.from_me
+                                ? "transparent"
+                                : Qt.rgba(
+                                    Kirigami.Theme.textColor.r,
+                                    Kirigami.Theme.textColor.g,
+                                    Kirigami.Theme.textColor.b,
+                                    0.15)
 
-                        TextEdit {
-                            id: bubbleText
+                        ColumnLayout {
+                            id: bubbleContent
                             anchors.fill: parent
                             anchors.margins: Kirigami.Units.gridUnit * 0.5
-                            text: messageDelegate.body
-                            color: messageDelegate.from_me
-                                ? Kirigami.Theme.highlightedTextColor
-                                : Kirigami.Theme.textColor
-                            wrapMode: Text.WordWrap
-                            readOnly: true
-                            selectByMouse: true
-                            selectedTextColor: messageDelegate.from_me
-                                ? Kirigami.Theme.textColor
-                                : Kirigami.Theme.highlightedTextColor
-                            selectionColor: messageDelegate.from_me
-                                ? Kirigami.Theme.backgroundColor
-                                : Kirigami.Theme.highlightColor
-                            font.pointSize: Kirigami.Theme.defaultFont.pointSize
+                            spacing: Kirigami.Units.smallSpacing
+
+                            Image {
+                                Layout.maximumWidth: messageCol.width * 0.6
+                                Layout.maximumHeight: Kirigami.Units.gridUnit * 15
+                                Layout.alignment: Qt.AlignHCenter
+                                Layout.margins: 0
+                                fillMode: Image.PreserveAspectFit
+                                source: messageDelegate.media_url
+                                visible: messageDelegate.is_media && messageDelegate.media_url.length > 0
+                            }
+
+                            Controls.BusyIndicator {
+                                Layout.alignment: Qt.AlignHCenter
+                                visible: messageDelegate.is_media && messageDelegate.media_url.length === 0
+                            }
+
+                            TextEdit {
+                                id: bubbleText
+                                Layout.fillWidth: true
+                                text: messageDelegate.body
+                                color: messageDelegate.isFailed
+                                    ? Kirigami.Theme.negativeTextColor
+                                    : messageDelegate.from_me
+                                        ? Kirigami.Theme.highlightedTextColor
+                                        : Kirigami.Theme.textColor
+                                wrapMode: Text.WordWrap
+                                readOnly: true
+                                selectByMouse: true
+                                selectedTextColor: messageDelegate.from_me
+                                    ? Kirigami.Theme.textColor
+                                    : Kirigami.Theme.highlightedTextColor
+                                selectionColor: messageDelegate.from_me
+                                    ? Kirigami.Theme.backgroundColor
+                                    : Kirigami.Theme.highlightColor
+                                font.pointSize: Kirigami.Theme.defaultFont.pointSize
+                                visible: messageDelegate.body.length > 0
+                            }
                         }
 
                         TapHandler {
@@ -413,6 +586,7 @@ Kirigami.ApplicationWindow {
                         }
                     }
 
+                    // Fill remaining space to push bubble to the correct side
                     Item { Layout.fillWidth: true }
                 }
 
@@ -435,11 +609,19 @@ Kirigami.ApplicationWindow {
                         font: Kirigami.Theme.smallFont
                         visible: messageDelegate.from_me
                     }
+                    // Failed status: show error text instead of icon
+                    Controls.Label {
+                        text: "Failed to send"
+                        color: Kirigami.Theme.negativeTextColor
+                        font: Kirigami.Theme.smallFont
+                        visible: messageDelegate.isFailed
+                    }
+                    // Normal status icon
                     Image {
                         width: 18
                         height: 12
                         fillMode: Image.PreserveAspectFit
-                        visible: messageDelegate.from_me
+                        visible: messageDelegate.from_me && !messageDelegate.isFailed
                         source: messageDelegate.status === "read"
                             ? "qrc:/svg/readIcon.svg"
                             : messageDelegate.status === "received"
@@ -465,6 +647,14 @@ Kirigami.ApplicationWindow {
         interval: 150
         repeat: false
         onTriggered: root.conversationList.apply_filter(root.pendingConversationFilter)
+    }
+
+    // ── Typing indicator debounce timer ──────────────────────────
+    Timer {
+        id: typingDebounce
+        interval: 5000
+        repeat: false
+        onTriggered: root.messageListModel.send_typing(false)
     }
 
     // ── Login dialog ─────────────────────────────────────────────
@@ -516,6 +706,7 @@ Kirigami.ApplicationWindow {
 
         onClosed: {
             if (!appState.logged_in) {
+                appState.cancel_login()
                 appState.status_message = "Not logged in"
             } else {
                 if (!sessionController.running) {
@@ -548,6 +739,7 @@ Kirigami.ApplicationWindow {
                 root.pageStack.push(welcomeComponent)
                 root.selectedConversationIndex = -1
                 root.selectedConversationName = ""
+                root.showPassiveNotification("Logged out", "short")
             }
         }
     }
@@ -558,12 +750,17 @@ Kirigami.ApplicationWindow {
         function onMessage_received(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode) {
             messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode)
         }
+
+        function onConversation_updated(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat) {
+            conversationList.handle_conversation_event(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat)
+        }
     }
 
     Connections {
         target: conversationList
 
         function onAuth_error(message) {
+            root.showPassiveNotification("Authentication error: " + message, "long")
             appState.logout(message)
         }
     }
@@ -572,6 +769,7 @@ Kirigami.ApplicationWindow {
         target: messageListModel
 
         function onAuth_error(message) {
+            root.showPassiveNotification("Authentication error: " + message, "long")
             appState.logout(message)
         }
     }

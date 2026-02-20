@@ -3,9 +3,9 @@ mod app_state;
 use core::pin::Pin;
 
 pub use app_state::AppStateRust;
-pub use app_state::SessionControllerRust;
 pub use app_state::ConversationListRust;
 pub use app_state::MessageListRust;
+pub use app_state::SessionControllerRust;
 
 #[cxx_qt::bridge]
 mod ffi {
@@ -26,6 +26,8 @@ mod ffi {
         type QHash_i32_QByteArray = cxx_qt_lib::QHash<cxx_qt_lib::QHashPair_i32_QByteArray>;
     }
 
+    // ── AppState ─────────────────────────────────────────────────
+
     extern "RustQt" {
         #[qobject]
         #[qml_element]
@@ -40,6 +42,9 @@ mod ffi {
         fn start_login(self: Pin<&mut AppState>);
 
         #[qinvokable]
+        fn cancel_login(self: Pin<&mut AppState>);
+
+        #[qinvokable]
         fn initialize(self: Pin<&mut AppState>);
 
         #[qinvokable]
@@ -47,6 +52,8 @@ mod ffi {
     }
 
     impl cxx_qt::Threading for AppState {}
+
+    // ── SessionController ────────────────────────────────────────
 
     extern "RustQt" {
         #[qobject]
@@ -68,16 +75,28 @@ mod ffi {
             status_code: i32,
         );
 
+        #[qsignal]
+        fn conversation_updated(
+            self: Pin<&mut SessionController>,
+            conversation_id: &QString,
+            name: &QString,
+            preview: &QString,
+            unread: bool,
+            last_message_timestamp: i64,
+            is_group_chat: bool,
+        );
+
         #[qinvokable]
         fn start(self: Pin<&mut SessionController>);
 
         #[qinvokable]
         fn stop(self: Pin<&mut SessionController>);
-
     }
 
     impl cxx_qt::Threading for SessionController {}
     impl cxx_qt::Threading for ConversationList {}
+
+    // ── ConversationList ─────────────────────────────────────────
 
     unsafe extern "RustQt" {
         #[qobject]
@@ -109,6 +128,20 @@ mod ffi {
         #[qinvokable]
         fn me_participant_id(self: &ConversationList, row: i32) -> QString;
 
+        #[qinvokable]
+        fn handle_conversation_event(
+            self: Pin<&mut ConversationList>,
+            conversation_id: &QString,
+            name: &QString,
+            preview: &QString,
+            unread: bool,
+            last_message_timestamp: i64,
+            is_group_chat: bool,
+        );
+
+        #[qinvokable]
+        fn mark_conversation_read(self: Pin<&mut ConversationList>, conversation_id: &QString);
+
         #[qsignal]
         fn auth_error(self: Pin<&mut ConversationList>, message: &QString);
 
@@ -120,6 +153,8 @@ mod ffi {
         #[rust_name = "end_reset_model"]
         fn endResetModel(self: Pin<&mut Self>);
     }
+
+    // ── MessageList ──────────────────────────────────────────────
 
     unsafe extern "RustQt" {
         #[qobject]
@@ -146,6 +181,9 @@ mod ffi {
         fn send_message(self: Pin<&mut MessageList>, text: &QString);
 
         #[qinvokable]
+        fn send_typing(self: Pin<&mut MessageList>, typing: bool);
+
+        #[qinvokable]
         fn handle_message_event(
             self: Pin<&mut MessageList>,
             conversation_id: &QString,
@@ -168,6 +206,21 @@ mod ffi {
         #[inherit]
         #[rust_name = "end_reset_model"]
         fn endResetModel(self: Pin<&mut Self>);
+
+        #[inherit]
+        #[rust_name = "begin_insert_rows"]
+        fn beginInsertRows(self: Pin<&mut Self>, parent: &QModelIndex, first: i32, last: i32);
+
+        #[inherit]
+        #[rust_name = "end_insert_rows"]
+        fn endInsertRows(self: Pin<&mut Self>);
+
+        #[inherit]
+        #[rust_name = "data_changed"]
+        fn dataChanged(self: Pin<&mut Self>, top_left: &QModelIndex, bottom_right: &QModelIndex);
+
+        #[inherit]
+        fn index(self: &Self, row: i32, column: i32, parent: &QModelIndex) -> QModelIndex;
     }
 
     impl cxx_qt::Threading for MessageList {}
