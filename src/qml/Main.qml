@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 import org.kde.kirigamiaddons.delegates as Delegates
+import QtQuick.Dialogs
 import org.gmessages_qt
 
 Kirigami.ApplicationWindow {
@@ -31,19 +32,38 @@ Kirigami.ApplicationWindow {
     property string pendingConversationFilter: ""
     property bool userAtBottom: true
 
+    // ── Staged attachments model ───────────────────────────────────
+    ListModel {
+        id: stagedAttachments
+    }
+
     // ── Helper: send current message ─────────────────────────────
     function doSendMessage() {
-        if (root.outgoingText.trim().length > 0) {
-            const body = root.outgoingText;
-            const convoId = root.conversationList.conversation_id(root.selectedConversationIndex);
+        const hasText = root.outgoingText.trim().length > 0;
+        const hasMedia = stagedAttachments.count > 0;
+
+        if (!hasText && !hasMedia) return;
+
+        const body = root.outgoingText.trim();
+        const convoId = root.conversationList.conversation_id(root.selectedConversationIndex);
+
+        if (hasMedia) {
+            // Send each attachment individually; text goes with the last one
+            for (let i = 0; i < stagedAttachments.count; i++) {
+                const fileUrl = stagedAttachments.get(i).fileUrl;
+                const caption = (i === stagedAttachments.count - 1 && hasText) ? body : "";
+                root.messageListModel.send_media(fileUrl, caption);
+            }
+            stagedAttachments.clear();
+            root.conversationList.update_preview(convoId, hasText ? "You: " + body : "You: Media", Date.now() * 1000);
+        } else {
             root.messageListModel.send_message(body);
-            root.outgoingText = "";
-            root.messageListModel.send_typing(false);
-            typingDebounce.stop();
-            
-            // Optimistically update conversation list preview
             root.conversationList.update_preview(convoId, "You: " + body, Date.now() * 1000);
         }
+
+        root.outgoingText = "";
+        root.messageListModel.send_typing(false);
+        typingDebounce.stop();
     }
 
     // ── pageStack configuration ──────────────────────────────────
@@ -414,6 +434,65 @@ Kirigami.ApplicationWindow {
                     visible: root.selectedConversationIndex >= 0
                 }
 
+                // ── Staged attachments preview ──────────────────────
+                Flow {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
+                    Layout.topMargin: stagedAttachments.count > 0 ? Kirigami.Units.smallSpacing : 0
+                    spacing: Kirigami.Units.smallSpacing
+                    visible: stagedAttachments.count > 0 && root.selectedConversationIndex >= 0
+
+                    Repeater {
+                        model: stagedAttachments
+
+                        Rectangle {
+                            id: thumbContainer
+                            required property int index
+                            required property string fileUrl
+
+                            width: Kirigami.Units.gridUnit * 5
+                            height: Kirigami.Units.gridUnit * 5
+                            radius: Kirigami.Units.smallSpacing
+                            color: Kirigami.Theme.alternateBackgroundColor
+                            clip: true
+
+                            Image {
+                                anchors.fill: parent
+                                source: thumbContainer.fileUrl
+                                fillMode: Image.PreserveAspectCrop
+                                asynchronous: true
+                                sourceSize.width: Kirigami.Units.gridUnit * 5
+                                sourceSize.height: Kirigami.Units.gridUnit * 5
+                            }
+
+                            // Semi-transparent scrim behind the X
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.right: parent.right
+                                width: Kirigami.Units.gridUnit * 1.5
+                                height: Kirigami.Units.gridUnit * 1.5
+                                radius: width / 2
+                                color: Qt.rgba(0, 0, 0, 0.55)
+
+                                Kirigami.Icon {
+                                    anchors.centerIn: parent
+                                    width: Kirigami.Units.iconSizes.small
+                                    height: Kirigami.Units.iconSizes.small
+                                    source: "dialog-close"
+                                    color: "white"
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: stagedAttachments.remove(thumbContainer.index)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Send bar (multi-line TextArea)
                 RowLayout {
                     Layout.fillWidth: true
@@ -421,13 +500,24 @@ Kirigami.ApplicationWindow {
                     spacing: Kirigami.Units.largeSpacing
                     visible: root.selectedConversationIndex >= 0 && !root.messageListModel.loading
 
+                    Controls.RoundButton {
+                        icon.name: "list-add"
+                        Layout.alignment: Qt.AlignBottom
+                        onClicked: attachmentDialog.open()
+                        Controls.ToolTip.text: "Add media"
+                        Controls.ToolTip.visible: hovered
+                        Controls.ToolTip.delay: Kirigami.Units.toolTipDelay
+                    }
+
                     Controls.ScrollView {
                         Layout.fillWidth: true
                         Layout.maximumHeight: Kirigami.Units.gridUnit * 8
 
                         Controls.TextArea {
                             id: sendField
-                            placeholderText: "Type a message…"
+                            placeholderText: stagedAttachments.count > 0
+                                ? "Add a caption…"
+                                : "Type a message…"
                             wrapMode: TextEdit.Wrap
                             text: root.outgoingText
                             onTextChanged: {
@@ -459,7 +549,7 @@ Kirigami.ApplicationWindow {
                         icon.name: "document-send"
                         text: "Send"
                         Layout.alignment: Qt.AlignBottom
-                        enabled: root.outgoingText.trim().length > 0
+                        enabled: root.outgoingText.trim().length > 0 || stagedAttachments.count > 0
                         onClicked: {
                             root.doSendMessage()
                             sendField.forceActiveFocus()
@@ -496,6 +586,19 @@ Kirigami.ApplicationWindow {
     // ── Media Viewer Dialog ──
     MediaViewerDialog {
         id: mediaViewerDialog
+    }
+
+    // ── Attachment Dialog ──
+    FileDialog {
+        id: attachmentDialog
+        title: "Select Attachment"
+        nameFilters: ["Media files (*.png *.jpg *.jpeg *.gif *.mp4 *.webm *.webp)"]
+        onAccepted: {
+            const url = String(attachmentDialog.selectedFile || attachmentDialog.currentFile);
+            if (url.length > 0) {
+                stagedAttachments.append({ fileUrl: url });
+            }
+        }
     }
 
     // ── Connections ──────────────────────────────────────────────

@@ -200,6 +200,9 @@ mod ffi {
         fn send_message(self: Pin<&mut MessageList>, text: &QString);
 
         #[qinvokable]
+        fn send_media(self: Pin<&mut MessageList>, file_url: &QString, text: &QString);
+
+        #[qinvokable]
         fn send_typing(self: Pin<&mut MessageList>, typing: bool);
 
         #[qinvokable]

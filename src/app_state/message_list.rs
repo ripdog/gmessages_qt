@@ -561,6 +561,185 @@ impl crate::ffi::MessageList {
         });
     }
 
+    pub fn send_media(mut self: Pin<&mut Self>, file_url: &QString, text: &QString) {
+        let file_path = file_url.to_string();
+        let path = if file_path.starts_with("file://") {
+            file_path[7..].to_string()
+        } else {
+            file_path
+        };
+
+        if path.is_empty() {
+            return;
+        }
+
+        let conversation_id = self.rust().selected_conversation_id.clone();
+        if conversation_id.is_empty() {
+            return;
+        }
+
+        let now_micros = chrono::Utc::now().timestamp_micros();
+        let tmp_id = Uuid::new_v4().to_string().to_lowercase();
+        let caption = text.to_string().trim().to_string();
+        
+        let bytes = std::fs::read(&path).unwrap_or_default();
+        if bytes.is_empty() {
+            eprintln!("Failed to read media file: {}", path);
+            return;
+        }
+
+        let path_obj = std::path::Path::new(&path);
+        let file_name = path_obj.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let ext = path_obj.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+        let mime_type = match ext.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "mp4" => "video/mp4",
+            "webm" => "video/webm",
+            "webp" => "image/webp",
+            _ => "application/octet-stream",
+        }.to_string();
+
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let preview_uri = format!("data:{};base64,{}", mime_type, b64);
+
+        let body_text = if caption.is_empty() { String::new() } else { caption.clone() };
+
+        let insert_pos = self.rust().messages.len() as i32;
+        self.as_mut().begin_insert_rows(&QModelIndex::default(), insert_pos, insert_pos);
+        let mut rust = self.as_mut().rust_mut();
+        rust.messages.push(MessageItem {
+            body: QString::from(body_text.as_str()), 
+            from_me: true,
+            transport_type: 4,
+            timestamp_micros: now_micros,
+            message_id: tmp_id.clone(),
+            status: QString::from("sending"),
+            media_url: QString::from(preview_uri.as_str()),
+            is_media: true,
+            avatar_url: QString::from(""),
+            is_info: false,
+            participant_id: String::new(),
+        });
+        drop(rust);
+        self.as_mut().end_insert_rows();
+
+        let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
+        let tmp_id_for_fail = tmp_id.clone();
+
+        spawn(async move {
+            let result: Result<(), String> = async {
+                let client = ensure_client().await?;
+                let handler = make_handler(&client).await?;
+
+                // Upload the media first
+                let media = client.upload_media(&bytes, &mime_type, &file_name)
+                    .await.map_err(|e| e.to_string())?;
+
+                // Build the send request with OUR tmp_id so the echo event matches
+                let mut message_info = vec![libgmessages_rs::proto::conversations::MessageInfo {
+                    action_message_id: None,
+                    data: Some(
+                        libgmessages_rs::proto::conversations::message_info::Data::MediaContent(media),
+                    ),
+                }];
+
+                // Add text as additional MessageInfo if present
+                let message_payload_content = if !caption.is_empty() {
+                    message_info.push(libgmessages_rs::proto::conversations::MessageInfo {
+                        action_message_id: None,
+                        data: Some(
+                            libgmessages_rs::proto::conversations::message_info::Data::MessageContent(
+                                libgmessages_rs::proto::conversations::MessageContent {
+                                    content: caption.clone(),
+                                },
+                            ),
+                        ),
+                    });
+                    Some(libgmessages_rs::proto::client::MessagePayloadContent {
+                        message_content: Some(
+                            libgmessages_rs::proto::conversations::MessageContent {
+                                content: caption.clone(),
+                            },
+                        ),
+                    })
+                } else {
+                    None
+                };
+
+                let payload = libgmessages_rs::proto::client::MessagePayload {
+                    tmp_id: tmp_id.clone(),
+                    message_payload_content,
+                    conversation_id: conversation_id.clone(),
+                    participant_id: String::new(),
+                    message_info,
+                    tmp_id2: tmp_id.clone(),
+                };
+                let request = libgmessages_rs::proto::client::SendMessageRequest {
+                    conversation_id: conversation_id.clone(),
+                    message_payload: Some(payload),
+                    sim_payload: None,
+                    tmp_id,
+                    force_rcs: false,
+                    reply: None,
+                };
+
+                // send_rpc_request may fail with a decode error on the response
+                // even though the message was actually sent successfully (Google uses
+                // group-encoded protobuf fields that prost can't handle).
+                match handler.send_request::<libgmessages_rs::proto::client::SendMessageResponse>(
+                    libgmessages_rs::proto::rpc::ActionType::SendMessage,
+                    libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                    &request,
+                ).await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("decode") || err_str.contains("end group") {
+                            eprintln!("media send response decode error (likely delivered): {err_str}");
+                        } else {
+                            return Err(err_str);
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+            .await;
+
+            if let Err(error) = result {
+                eprintln!("media send failed: {error}");
+                let is_auth_error =
+                    error.contains("authentication credential") || error.contains("401") || error.contains("403");
+                if is_auth_error {
+                    clear_client().await;
+                    let store = AuthDataStore::default_store();
+                    let _ = store.delete();
+                }
+                let _ = qt_thread.queue(
+                    move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        qobject.as_mut().begin_reset_model();
+                        let mut rust = qobject.as_mut().rust_mut();
+                        if let Some(item) = rust
+                            .messages
+                            .iter_mut()
+                            .find(|item| item.message_id == tmp_id_for_fail)
+                        {
+                            item.status = QString::from("failed");
+                        }
+                        qobject.as_mut().end_reset_model();
+                        if is_auth_error {
+                            qobject
+                                .as_mut()
+                                .auth_error(&QString::from(error.as_str()));
+                        }
+                    },
+                );
+            }
+        });
+    }
+
     pub fn send_typing(self: Pin<&mut Self>, typing: bool) {
         let conversation_id = self.rust().selected_conversation_id.clone();
         if conversation_id.is_empty() {
