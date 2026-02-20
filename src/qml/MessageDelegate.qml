@@ -17,6 +17,7 @@ Item {
     required property string avatar_url
     required property bool is_info
     required property int transport_type
+    required property string mime_type
 
     width: ListView.view ? ListView.view.width : 0
     height: messageCol.implicitHeight
@@ -24,6 +25,7 @@ Item {
     readonly property bool isFailed: messageDelegate.status === "failed"
     // 1=SMS, 2=Downloaded MMS, 3=Undownloaded MMS
     readonly property bool isSms: messageDelegate.transport_type === 1 || messageDelegate.transport_type === 2 || messageDelegate.transport_type === 3
+    readonly property bool isVideo: messageDelegate.mime_type.startsWith("video/")
 
     ColumnLayout {
         id: messageCol
@@ -118,19 +120,74 @@ Item {
                     anchors.margins: Kirigami.Units.gridUnit * 0.5
                     spacing: Kirigami.Units.smallSpacing
 
+                    // ── Image media ──
                     Image {
                         Layout.maximumWidth: messageCol.width * 0.6
                         Layout.maximumHeight: Kirigami.Units.gridUnit * 15
                         Layout.alignment: Qt.AlignHCenter
                         Layout.margins: 0
                         fillMode: Image.PreserveAspectFit
-                        source: messageDelegate.media_url
-                        visible: messageDelegate.is_media && messageDelegate.media_url.length > 0
+                        source: messageDelegate.isVideo ? "" : messageDelegate.media_url
+                        visible: messageDelegate.is_media && messageDelegate.media_url.length > 0 && !messageDelegate.isVideo
 
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
+                                mediaViewerDialog.mimeType = messageDelegate.mime_type
+                                mediaViewerDialog.sourceUrl = messageDelegate.media_url
+                                mediaViewerDialog.isActualSize = false
+                                mediaViewerDialog.open()
+                            }
+                        }
+                    }
+
+                    // ── Video media (thumbnail with play overlay) ──
+                    Item {
+                        Layout.maximumWidth: messageCol.width * 0.6
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 12
+                        Layout.preferredHeight: Kirigami.Units.gridUnit * 9
+                        Layout.alignment: Qt.AlignHCenter
+                        visible: messageDelegate.is_media && messageDelegate.media_url.length > 0 && messageDelegate.isVideo
+
+                        Rectangle {
+                            anchors.fill: parent
+                            color: Qt.rgba(0, 0, 0, 0.3)
+                            radius: Kirigami.Units.smallSpacing
+
+                            // Play button overlay
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: Kirigami.Units.gridUnit * 3
+                                height: Kirigami.Units.gridUnit * 3
+                                radius: width / 2
+                                color: Qt.rgba(0, 0, 0, 0.6)
+
+                                Kirigami.Icon {
+                                    anchors.centerIn: parent
+                                    width: Kirigami.Units.iconSizes.medium
+                                    height: Kirigami.Units.iconSizes.medium
+                                    source: "media-playback-start"
+                                    color: "white"
+                                }
+                            }
+
+                            // "Video" label
+                            Controls.Label {
+                                anchors.bottom: parent.bottom
+                                anchors.left: parent.left
+                                anchors.margins: Kirigami.Units.smallSpacing
+                                text: "Video"
+                                color: "white"
+                                font: Kirigami.Theme.smallFont
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                mediaViewerDialog.mimeType = messageDelegate.mime_type
                                 mediaViewerDialog.sourceUrl = messageDelegate.media_url
                                 mediaViewerDialog.isActualSize = false
                                 mediaViewerDialog.open()

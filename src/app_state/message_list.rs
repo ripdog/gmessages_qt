@@ -8,6 +8,7 @@ use cxx_qt_lib::QString;
 
 use libgmessages_rs::store::AuthDataStore;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::ffi::QHash_i32_QByteArray;
@@ -31,6 +32,7 @@ pub struct MessageItem {
     pub avatar_url: QString,
     pub is_info: bool,
     pub participant_id: String,
+    pub mime_type: QString,
 }
 
 pub struct MessageListRust {
@@ -82,6 +84,7 @@ impl crate::ffi::MessageList {
             9 => QVariant::from(&item.is_media),
             10 => QVariant::from(&item.avatar_url),
             11 => QVariant::from(&item.is_info),
+            12 => QVariant::from(&item.mime_type),
             _ => QVariant::default(),
         }
     }
@@ -100,6 +103,7 @@ impl crate::ffi::MessageList {
         roles.insert(9, "is_media".into());
         roles.insert(10, "avatar_url".into());
         roles.insert(11, "is_info".into());
+        roles.insert(12, "mime_type".into());
         roles
     }
 
@@ -226,9 +230,13 @@ impl crate::ffi::MessageList {
                         let message_id = extract_message_id(&message);
 
                         let is_media = media.is_some();
-                        if let Some((id, key, mime)) = media {
-                            media_downloads.push((message_id.clone(), id, key, mime));
-                        }
+                        let media_mime = if let Some((id, key, ref mime)) = media {
+                            let m = mime.clone();
+                            media_downloads.push((message_id.clone(), id, key, mime.clone()));
+                            m
+                        } else {
+                            String::new()
+                        };
 
                         let mut avatar_url = String::new();
                         if !from_me && !message.participant_id.is_empty() {
@@ -249,6 +257,7 @@ impl crate::ffi::MessageList {
                             avatar_url: QString::from(avatar_url.as_str()),
                             is_info: status_code >= 200,
                             participant_id: message.participant_id.clone(),
+                            mime_type: QString::from(media_mime.as_str()),
                         })
                     })
                     .collect();
@@ -357,8 +366,7 @@ impl crate::ffi::MessageList {
                             if let Some(client) = get_client().await {
                                 for (msg_id, media_id, key, mime) in media_downloads {
                                     if let Ok(data) = client.download_media(&media_id, &key).await {
-                                        let b64 = STANDARD.encode(&data);
-                                        let uri = format!("data:{};base64,{}", mime, b64);
+                                        let uri = crate::app_state::utils::media_data_to_uri(&data, &mime);
                                         let _ = ui_for_media.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                                             let mut rust = qobject.as_mut().rust_mut();
                                             if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
@@ -465,6 +473,7 @@ impl crate::ffi::MessageList {
             avatar_url: QString::from(""),
             is_info: false,
             participant_id: String::new(),
+            mime_type: QString::from(""),
         });
         // We do not sort here because the new message naturally belongs at the end.
         // It prevents scroll position reset issues.
@@ -601,8 +610,7 @@ impl crate::ffi::MessageList {
             _ => "application/octet-stream",
         }.to_string();
 
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        let preview_uri = format!("data:{};base64,{}", mime_type, b64);
+        let preview_uri = crate::app_state::utils::media_data_to_uri(&bytes, &mime_type);
 
         let body_text = if caption.is_empty() { String::new() } else { caption.clone() };
 
@@ -621,6 +629,7 @@ impl crate::ffi::MessageList {
             avatar_url: QString::from(""),
             is_info: false,
             participant_id: String::new(),
+            mime_type: QString::from(mime_type.as_str()),
         });
         drop(rust);
         self.as_mut().end_insert_rows();
@@ -825,6 +834,7 @@ impl crate::ffi::MessageList {
             avatar_url: QString::from(""),
             is_info: status_code >= 200,
             participant_id: participant_id.clone(),
+            mime_type: QString::from(""),
         };
 
         // Find insertion index (sorted by timestamp ascending)
@@ -869,8 +879,7 @@ impl crate::ffi::MessageList {
             if let Some(client) = get_client().await {
                 let key_bytes = STANDARD.decode(&key).unwrap_or_default();
                 if let Ok(data) = client.download_media(&med_id, &key_bytes).await {
-                    let b64 = STANDARD.encode(&data);
-                    let uri = format!("data:{};base64,{}", mime, b64);
+                    let uri = crate::app_state::utils::media_data_to_uri(&data, &mime);
                     let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                         let mut rust = qobject.as_mut().rust_mut();
                         if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
@@ -891,6 +900,63 @@ impl crate::ffi::MessageList {
                 }
             }
         });
+    }
+
+    pub fn save_media(self: Pin<&mut Self>, source_url: &QString, mime_type: &QString) -> QString {
+        let url = source_url.to_string();
+        let mime = mime_type.to_string();
+
+        // Read the source data — either from a data: URI or a file:// path
+        let data_bytes = if let Some(rest) = url.strip_prefix("data:") {
+            // data:<mime>;base64,<data>
+            rest.find(";base64,").and_then(|pos| {
+                let b64 = &rest[pos + 8..];
+                STANDARD.decode(b64).ok()
+            })
+        } else if let Some(path) = url.strip_prefix("file://") {
+            // file:///path/to/file
+            std::fs::read(path).ok()
+        } else {
+            None
+        };
+
+        let Some(data_bytes) = data_bytes else {
+            eprintln!("save_media: could not read media from: {}", &url[..url.len().min(80)]);
+            return QString::from("");
+        };
+
+        let ext = crate::app_state::utils::mime_to_extension(&mime);
+
+        // Get the Downloads directory
+        let downloads_dir = dirs::download_dir().unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join("Downloads")
+        });
+
+        // Generate a unique filename
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let short_id = &Uuid::new_v4().to_string()[..8];
+        let filename = format!("gmessages_{timestamp}_{short_id}.{ext}");
+        let full_path = downloads_dir.join(&filename);
+
+        // Ensure downloads directory exists
+        if let Err(e) = std::fs::create_dir_all(&downloads_dir) {
+            eprintln!("save_media: failed to create downloads dir: {e}");
+            return QString::from("");
+        }
+
+        match std::fs::write(&full_path, &data_bytes) {
+            Ok(()) => {
+                let path_str = full_path.to_string_lossy().to_string();
+                eprintln!("save_media: saved to {path_str}");
+                QString::from(path_str.as_str())
+            }
+            Err(e) => {
+                eprintln!("save_media: write failed: {e}");
+                QString::from("")
+            }
+        }
     }
 }
 

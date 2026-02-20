@@ -451,19 +451,46 @@ Kirigami.ApplicationWindow {
                             required property int index
                             required property string fileUrl
 
+                            readonly property bool isVideoFile: {
+                                const lower = thumbContainer.fileUrl.toLowerCase()
+                                return lower.endsWith(".mp4") || lower.endsWith(".webm")
+                                    || lower.endsWith(".3gp") || lower.endsWith(".3g2")
+                            }
+
                             width: Kirigami.Units.gridUnit * 5
                             height: Kirigami.Units.gridUnit * 5
                             radius: Kirigami.Units.smallSpacing
                             color: Kirigami.Theme.alternateBackgroundColor
                             clip: true
 
+                            // Image thumbnail (non-video only)
                             Image {
                                 anchors.fill: parent
-                                source: thumbContainer.fileUrl
+                                source: thumbContainer.isVideoFile ? "" : thumbContainer.fileUrl
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
                                 sourceSize.width: Kirigami.Units.gridUnit * 5
                                 sourceSize.height: Kirigami.Units.gridUnit * 5
+                                visible: !thumbContainer.isVideoFile
+                            }
+
+                            // Video placeholder
+                            Item {
+                                anchors.fill: parent
+                                visible: thumbContainer.isVideoFile
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    color: Qt.rgba(0, 0, 0, 0.3)
+                                }
+
+                                Kirigami.Icon {
+                                    anchors.centerIn: parent
+                                    width: Kirigami.Units.iconSizes.medium
+                                    height: Kirigami.Units.iconSizes.medium
+                                    source: "media-playback-start"
+                                    color: "white"
+                                }
                             }
 
                             // Semi-transparent scrim behind the X
@@ -592,7 +619,7 @@ Kirigami.ApplicationWindow {
     FileDialog {
         id: attachmentDialog
         title: "Select Attachment"
-        nameFilters: ["Media files (*.png *.jpg *.jpeg *.gif *.mp4 *.webm *.webp)"]
+        nameFilters: ["All media (*.png *.jpg *.jpeg *.gif *.webp *.mp4 *.webm *.3gp)", "Images (*.png *.jpg *.jpeg *.gif *.webp)", "Videos (*.mp4 *.webm *.3gp)", "All files (*)"]
         onAccepted: {
             const url = String(attachmentDialog.selectedFile || attachmentDialog.currentFile);
             if (url.length > 0) {

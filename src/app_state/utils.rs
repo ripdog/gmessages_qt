@@ -183,3 +183,43 @@ pub fn map_message_status(status_code: i32, from_me: bool) -> &'static str {
         _ => "sent",
     }
 }
+
+pub fn mime_to_extension(mime: &str) -> &str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/3gpp" => "3gp",
+        "video/3gpp2" => "3g2",
+        _ => "bin",
+    }
+}
+
+/// Convert downloaded media bytes into a URI suitable for QML.
+/// Images → data: URI (works natively with QML Image).
+/// Videos → file: URI (Qt MediaPlayer needs a real file).
+pub fn media_data_to_uri(data: &[u8], mime: &str) -> String {
+    if mime.starts_with("video/") {
+        // Write to a temp file so MediaPlayer can open it
+        let ext = mime_to_extension(mime);
+        let tmp_dir = std::env::temp_dir().join("gmessages_media");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let filename = format!("{}_{}.{}", uuid::Uuid::new_v4(), chrono::Utc::now().timestamp_millis(), ext);
+        let path = tmp_dir.join(filename);
+        match std::fs::write(&path, data) {
+            Ok(()) => format!("file://{}", path.to_string_lossy()),
+            Err(e) => {
+                eprintln!("media_data_to_uri: failed to write temp file: {e}");
+                // Fallback to data URI
+                let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+                format!("data:{};base64,{}", mime, b64)
+            }
+        }
+    } else {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(data);
+        format!("data:{};base64,{}", mime, b64)
+    }
+}
