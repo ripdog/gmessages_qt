@@ -73,6 +73,10 @@ mod ffi {
             tmp_id: &QString,
             timestamp_micros: i64,
             status_code: i32,
+            is_media: bool,
+            media_id: &QString,
+            decryption_key: &QString,
+            mime_type: &QString,
         );
 
         #[qsignal]
@@ -142,6 +146,14 @@ mod ffi {
         #[qinvokable]
         fn mark_conversation_read(self: Pin<&mut ConversationList>, conversation_id: &QString);
 
+        #[qinvokable]
+        fn update_preview(
+            self: Pin<&mut ConversationList>,
+            conversation_id: &QString,
+            preview: &QString,
+            timestamp_micros: i64,
+        );
+
         #[qsignal]
         fn auth_error(self: Pin<&mut ConversationList>, message: &QString);
 
@@ -152,6 +164,13 @@ mod ffi {
         #[inherit]
         #[rust_name = "end_reset_model"]
         fn endResetModel(self: Pin<&mut Self>);
+
+        #[inherit]
+        #[rust_name = "data_changed"]
+        fn dataChanged(self: Pin<&mut Self>, top_left: &QModelIndex, bottom_right: &QModelIndex);
+
+        #[inherit]
+        fn index(self: &Self, row: i32, column: i32, parent: &QModelIndex) -> QModelIndex;
     }
 
     // ── MessageList ──────────────────────────────────────────────
@@ -194,6 +213,16 @@ mod ffi {
             tmp_id: &QString,
             timestamp_micros: i64,
             status_code: i32,
+            is_media: bool,
+        );
+
+        #[qinvokable]
+        fn queue_media_download(
+            self: Pin<&mut MessageList>,
+            message_id: &QString,
+            media_id: &QString,
+            decryption_key: &QString,
+            mime_type: &QString,
         );
 
         #[qsignal]

@@ -595,6 +595,15 @@ async fn run_long_poll_loop(
                         .unwrap_or(0);
                     let timestamp_micros = message.timestamp;
 
+                    let media = extract_message_media(&message);
+                    let is_media = media.is_some();
+
+                    let (media_id, decryption_key, mime_type) = if let Some(m) = &media {
+                        (m.0.clone(), STANDARD.encode(&m.1), m.2.clone())
+                    } else {
+                        (String::new(), String::new(), String::new())
+                    };
+
                     let _ = qt_thread.queue(
                         move |mut qobject: Pin<&mut ffi::SessionController>| {
                             qobject.as_mut().message_received(
@@ -606,6 +615,10 @@ async fn run_long_poll_loop(
                                 &QString::from(tmp_id.as_str()),
                                 timestamp_micros,
                                 status_code,
+                                is_media,
+                                &QString::from(media_id.as_str()),
+                                &QString::from(decryption_key.as_str()),
+                                &QString::from(mime_type.as_str()),
                             );
                         },
                     );
@@ -1014,7 +1027,7 @@ impl crate::ffi::ConversationList {
             .iter()
             .position(|item| item.conversation_id == convo_id)
         {
-            // Update in-place
+            self.as_mut().begin_reset_model();
             let mut rust = self.as_mut().rust_mut();
             let item = &mut rust.all_items[pos];
             item.name = QString::from(name_str.as_str());
@@ -1030,10 +1043,7 @@ impl crate::ffi::ConversationList {
 
             // Rebuild filtered list and emit full reset (sorting changed positions)
             rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
-            // We need to use begin_reset_model since sort may change positions
             drop(rust);
-            // Actually we need to call begin/end on self
-            self.as_mut().begin_reset_model();
             self.as_mut().end_reset_model();
         } else {
             // New conversation — insert it
@@ -1055,16 +1065,43 @@ impl crate::ffi::ConversationList {
             rust.all_items
                 .sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
             rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
+            drop(rust);
             self.as_mut().end_reset_model();
         }
     }
 
     pub fn mark_conversation_read(mut self: Pin<&mut Self>, conversation_id: &QString) {
         let convo_id = conversation_id.to_string();
-        if let Some(pos) = self.rust().all_items.iter().position(|item| item.conversation_id == convo_id) {
-            let mut rust = self.as_mut().rust_mut();
-            if rust.all_items[pos].unread {
-                rust.all_items[pos].unread = false;
+        if let Some(pos) = self.rust().filtered_items.iter().position(|item| item.conversation_id == convo_id) {
+            if self.rust().filtered_items[pos].unread {
+                let all_pos = self.rust().all_items.iter().position(|item| item.conversation_id == convo_id).unwrap();
+                let mut rust = self.as_mut().rust_mut();
+                rust.all_items[all_pos].unread = false;
+                rust.filtered_items[pos].unread = false;
+                drop(rust);
+                let model_index = self.as_ref().index(pos as i32, 0, &QModelIndex::default());
+                self.as_mut().data_changed(&model_index, &model_index);
+            }
+        }
+    }
+
+    pub fn update_preview(
+        mut self: Pin<&mut Self>,
+        conversation_id: &QString,
+        preview: &QString,
+        timestamp_micros: i64,
+    ) {
+        let convo_id = conversation_id.to_string();
+        let preview_str = preview.to_string();
+        
+        let mut rust = self.as_mut().rust_mut();
+        if let Some(pos) = rust.all_items.iter().position(|i| i.conversation_id == convo_id) {
+            if timestamp_micros >= rust.all_items[pos].last_message_timestamp {
+                rust.all_items[pos].preview = QString::from(preview_str);
+                rust.all_items[pos].last_message_timestamp = timestamp_micros;
+                rust.all_items[pos].last_message_time = QString::from(format_human_timestamp(timestamp_micros));
+                
+                rust.all_items.sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
                 rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
                 drop(rust);
                 self.as_mut().begin_reset_model();
@@ -1398,7 +1435,8 @@ impl crate::ffi::MessageList {
         let tmp_id = Uuid::new_v4().to_string().to_lowercase();
 
         // Optimistic insert
-        self.as_mut().begin_reset_model();
+        let insert_pos = self.rust().messages.len() as i32;
+        self.as_mut().begin_insert_rows(&QModelIndex::default(), insert_pos, insert_pos);
         let mut rust = self.as_mut().rust_mut();
         rust.messages.push(MessageItem {
             body: QString::from(body.clone()),
@@ -1410,9 +1448,10 @@ impl crate::ffi::MessageList {
             media_url: QString::from(""),
             is_media: false,
         });
-        rust.messages.sort_by_key(|item| item.timestamp_micros);
+        // We do not sort here because the new message naturally belongs at the end.
+        // It prevents scroll position reset issues.
         drop(rust);
-        self.as_mut().end_reset_model();
+        self.as_mut().end_insert_rows();
 
         let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
         let tmp_id_for_fail = tmp_id.clone();
@@ -1531,6 +1570,7 @@ impl crate::ffi::MessageList {
         tmp_id: &QString,
         timestamp_micros: i64,
         status_code: i32,
+        is_media: bool,
     ) {
         let conversation_id = conversation_id.to_string();
         if conversation_id.is_empty() {
@@ -1586,7 +1626,7 @@ impl crate::ffi::MessageList {
             message_id,
             status: QString::from(status),
             media_url: QString::from(""),
-            is_media: false,
+            is_media,
         };
 
         // Find insertion index (sorted by timestamp ascending)
@@ -1603,6 +1643,40 @@ impl crate::ffi::MessageList {
             .messages
             .insert(insert_pos, new_item);
         self.as_mut().end_insert_rows();
+    }
+
+    pub fn queue_media_download(
+        self: Pin<&mut Self>,
+        message_id: &QString,
+        media_id: &QString,
+        decryption_key: &QString,
+        mime_type: &QString,
+    ) {
+        let msg_id = message_id.to_string();
+        let med_id = media_id.to_string();
+        let key = decryption_key.to_string();
+        let mime = mime_type.to_string();
+
+        let ui_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
+
+        spawn(async move {
+            if let Some(client) = get_client().await {
+                let key_bytes = STANDARD.decode(&key).unwrap_or_default();
+                if let Ok(data) = client.download_media(&med_id, &key_bytes).await {
+                    let b64 = STANDARD.encode(&data);
+                    let uri = format!("data:{};base64,{}", mime, b64);
+                    let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        let mut rust = qobject.as_mut().rust_mut();
+                        if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
+                            rust.messages[pos].media_url = QString::from(uri.as_str());
+                            drop(rust);
+                            let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
+                            qobject.as_mut().data_changed(&model_index, &model_index);
+                        }
+                    });
+                }
+            }
+        });
     }
 }
 

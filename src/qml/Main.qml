@@ -34,10 +34,15 @@ Kirigami.ApplicationWindow {
     // ── Helper: send current message ─────────────────────────────
     function doSendMessage() {
         if (root.outgoingText.trim().length > 0) {
-            root.messageListModel.send_message(root.outgoingText)
-            root.outgoingText = ""
-            root.messageListModel.send_typing(false)
-            typingDebounce.stop()
+            const body = root.outgoingText;
+            const convoId = root.conversationList.conversation_id(root.selectedConversationIndex);
+            root.messageListModel.send_message(body);
+            root.outgoingText = "";
+            root.messageListModel.send_typing(false);
+            typingDebounce.stop();
+            
+            // Optimistically update conversation list preview
+            root.conversationList.update_preview(convoId, "You: " + body, Date.now() * 1000);
         }
     }
 
@@ -166,8 +171,8 @@ Kirigami.ApplicationWindow {
                             root.selectedMeParticipantId = root.conversationList.me_participant_id(conversationDelegate.index)
                             root.statusVisibleIndex = -1
                             root.lastMessageCount = 0
-                            root.conversationList.mark_conversation_read(convoId)
                             root.messageListModel.load(convoId)
+                            root.conversationList.mark_conversation_read(convoId)
 
                             // Push the conversation page if not already shown
                             if (root.pageStack.depth < 2) {
@@ -337,7 +342,7 @@ Kirigami.ApplicationWindow {
 
                         onCountChanged: {
                             if (count > 0 && root.userAtBottom) {
-                                positionViewAtEnd()
+                                scrollTimer.restart()
                             }
                             if (!root.messageListModel.loading && count > root.lastMessageCount) {
                                 root.statusVisibleIndex = count - 1
@@ -351,8 +356,18 @@ Kirigami.ApplicationWindow {
                             function onLoadingChanged() {
                                 if (!root.messageListModel.loading && messageList.count > 0) {
                                     root.userAtBottom = true
-                                    messageList.positionViewAtEnd()
+                                    scrollTimer.restart()
                                 }
+                            }
+                        }
+
+                        Timer {
+                            id: scrollTimer
+                            interval: 100
+                            repeat: false
+                            onTriggered: {
+                                messageList.positionViewAtEnd()
+                                root.userAtBottom = true
                             }
                         }
 
@@ -747,8 +762,13 @@ Kirigami.ApplicationWindow {
     Connections {
         target: sessionController
 
-        function onMessage_received(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode) {
-            messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode)
+        function onMessage_received(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia, mediaId, decryptionKey, mimeType) {
+            messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia)
+            conversationList.update_preview(conversationId, isMedia ? "Media" : body, timestampMicros)
+            
+            if (isMedia && mediaId.length > 0) {
+                messageListModel.queue_media_download(messageId.length > 0 ? messageId : tmpId, mediaId, decryptionKey, mimeType)
+            }
         }
 
         function onConversation_updated(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat) {
