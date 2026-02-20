@@ -245,6 +245,14 @@ mod ffi {
         fn endInsertRows(self: Pin<&mut Self>);
 
         #[inherit]
+        #[rust_name = "begin_remove_rows"]
+        fn beginRemoveRows(self: Pin<&mut Self>, parent: &QModelIndex, first: i32, last: i32);
+
+        #[inherit]
+        #[rust_name = "end_remove_rows"]
+        fn endRemoveRows(self: Pin<&mut Self>);
+
+        #[inherit]
         #[rust_name = "data_changed"]
         fn dataChanged(self: Pin<&mut Self>, top_left: &QModelIndex, bottom_right: &QModelIndex);
 
