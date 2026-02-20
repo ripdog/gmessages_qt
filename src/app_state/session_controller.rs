@@ -214,9 +214,9 @@ pub async fn run_long_poll_loop(
             skip_count -= 1;
             continue;
         }
-        if data.bugle_route
-            != libgmessages_rs::proto::rpc::BugleRoute::DataEvent as i32
-        {
+        let _ = handler.process_payload(data).await;
+
+        if data.bugle_route != libgmessages_rs::proto::rpc::BugleRoute::DataEvent as i32 {
             continue;
         }
 

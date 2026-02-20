@@ -7,7 +7,6 @@ use cxx_qt_lib::QString;
 
 use libgmessages_rs::store::AuthDataStore;
 use std::collections::HashMap;
-use std::time::Duration;
 use uuid::Uuid;
 
 use crate::ffi::QHash_i32_QByteArray;
@@ -15,6 +14,7 @@ use crate::ffi::QModelIndex;
 use crate::ffi::QVariant;
 
 use super::*;
+use crate::app_state::shared::fetch_avatars_async;
 // ── MessageList ──────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -29,6 +29,7 @@ pub struct MessageItem {
     pub is_media: bool,
     pub avatar_url: QString,
     pub is_info: bool,
+    pub participant_id: String,
 }
 
 pub struct MessageListRust {
@@ -132,39 +133,46 @@ impl crate::ffi::MessageList {
         let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
 
         spawn(async move {
-            let result: Result<(Vec<MessageItem>, String, Vec<(String, String, Vec<u8>, String)>), String> = async {
+            let result: Result<(Vec<MessageItem>, String, Vec<(String, String, Vec<u8>, String)>, Vec<String>, Vec<(String, String)>), String> = async {
+                eprintln!("[{}] MessageList: Start load", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 let client = ensure_client().await?;
+                eprintln!("[{}] MessageList: ensured client", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 let handler = make_handler(&client).await?;
-                let response_loop = start_handler_loop(&handler).await;
+                eprintln!("[{}] MessageList: made handler", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
 
                 let request = libgmessages_rs::proto::client::ListMessagesRequest {
                     conversation_id: conversation_id.clone(),
                     count: 50,
                     cursor: None,
                 };
-                let response: libgmessages_rs::proto::client::ListMessagesResponse =
-                    handler
-                        .send_request(
-                            libgmessages_rs::proto::rpc::ActionType::ListMessages,
-                            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                            &request,
-                        )
-                        .await
-                        .map_err(|e| e.to_string())?;
+                let req_msgs = async {
+                    let res = handler.send_request::<libgmessages_rs::proto::client::ListMessagesResponse>(
+                        libgmessages_rs::proto::rpc::ActionType::ListMessages,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &request,
+                    ).await;
+                    eprintln!("[{}] MessageList: req_msgs finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                    res
+                };
 
-                let convo_request =
-                    libgmessages_rs::proto::client::GetConversationRequest {
-                        conversation_id: conversation_id.clone(),
-                    };
-                let convo_response: libgmessages_rs::proto::client::GetConversationResponse =
-                    handler
-                        .send_request(
-                            libgmessages_rs::proto::rpc::ActionType::GetConversation,
-                            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                            &convo_request,
-                        )
-                        .await
-                        .map_err(|e| e.to_string())?;
+                let convo_request = libgmessages_rs::proto::client::GetConversationRequest {
+                    conversation_id: conversation_id.clone(),
+                };
+                
+                let req_convo = async {
+                    let res = handler.send_request::<libgmessages_rs::proto::client::GetConversationResponse>(
+                        libgmessages_rs::proto::rpc::ActionType::GetConversation,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &convo_request,
+                    ).await;
+                    eprintln!("[{}] MessageList: req_convo finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                    res
+                };
+
+                let (response, convo_response) = tokio::try_join!(req_msgs, req_convo)
+                    .map_err(|e| e.to_string())?;
+
+                eprintln!("[{}] MessageList: Network requests finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
 
                 let mut me_participant_id = String::new();
                 let mut avatar_identifiers: Vec<(String, String)> = Vec::new();
@@ -188,45 +196,20 @@ impl crate::ffi::MessageList {
                 }
                 
                 let mut avatar_by_participant_id: HashMap<String, String> = HashMap::new();
-                if !avatar_identifiers.is_empty() {
-                    let request = libgmessages_rs::proto::client::GetThumbnailRequest {
-                        identifiers: avatar_identifiers.iter().map(|(_, id)| id.clone()).collect(),
-                    };
-                    let attempts = [
-                        (true, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
-                        (true, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
-                        (false, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
-                        (false, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
-                        (false, libgmessages_rs::proto::rpc::MessageType::UnknownMessageType),
-                    ];
-                    for (encrypted, message_type) in attempts {
-                        let attempt: Result<libgmessages_rs::proto::client::GetThumbnailResponse, _> = if encrypted {
-                            handler.send_request(libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail, message_type, &request).await
+                let mut identifiers_to_fetch = Vec::new();
+
+                {
+                    let cache = shared().avatars.read().await;
+                    for (pid, id) in &avatar_identifiers {
+                        if let Some(url) = cache.get(id) {
+                            avatar_by_participant_id.insert(pid.clone(), url.clone());
                         } else {
-                            handler.send_request_dont_encrypt(libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail, message_type, &request, Duration::from_secs(5)).await
-                        };
-                        if let Ok(response) = attempt {
-                            if !response.thumbnail.is_empty() {
-                                for thumb in response.thumbnail {
-                                    if let Some(data) = thumb.data.as_ref() {
-                                        if !data.image_buffer.is_empty() {
-                                            let ext = detect_extension(&data.image_buffer);
-                                            let encoded = STANDARD.encode(&data.image_buffer);
-                                            let url = format!("data:image/{ext};base64,{encoded}");
-                                            
-                                            if let Some((pid, _)) = avatar_identifiers.iter().find(|(_, id)| id == &thumb.identifier) {
-                                                avatar_by_participant_id.insert(pid.clone(), url);
-                                            }
-                                        }
-                                    }
-                                }
-                                break;
+                            if !identifiers_to_fetch.contains(id) {
+                                identifiers_to_fetch.push(id.clone());
                             }
                         }
                     }
                 }
-
-                response_loop.abort();
 
                 let mut media_downloads = Vec::new();
                 let mut messages: Vec<MessageItem> = response
@@ -271,6 +254,7 @@ impl crate::ffi::MessageList {
                             is_media,
                             avatar_url: QString::from(avatar_url.as_str()),
                             is_info: status_code >= 200,
+                            participant_id: message.participant_id.clone(),
                         })
                     })
                     .collect();
@@ -280,21 +264,22 @@ impl crate::ffi::MessageList {
                 // Mark conversation as read
                 if let Some(last_msg) = messages.last() {
                     if !last_msg.message_id.is_empty() {
-                        let _ = client
-                            .mark_message_read(
-                                &conversation_id,
-                                &last_msg.message_id,
-                            )
-                            .await;
+                        let msg_id = last_msg.message_id.clone();
+                        let convo_id = conversation_id.clone();
+                        let client_clone = client.clone();
+                        spawn(async move {
+                            let _ = client_clone.mark_message_read(&convo_id, &msg_id).await;
+                        });
                     }
                 }
 
-                Ok((messages, me_participant_id, media_downloads))
+                eprintln!("[{}] MessageList: Pre-processing finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                Ok((messages, me_participant_id, media_downloads, identifiers_to_fetch, avatar_identifiers))
             }
             .await;
 
             match result {
-                Ok((new_messages, me_participant_id, media_downloads)) => {
+                Ok((new_messages, me_participant_id, media_downloads, identifiers_to_fetch, avatar_identifiers)) => {
                     let convo_id = conversation_id.clone();
                     let _ = qt_thread.queue(
                         move |mut qobject: Pin<&mut ffi::MessageList>| {
@@ -308,6 +293,7 @@ impl crate::ffi::MessageList {
                                     qobject.as_mut().begin_reset_model();
                                     qobject.as_mut().set_loading(false);
                                     qobject.as_mut().end_reset_model();
+                                    eprintln!("[{}] MessageList: UI updated (first load)", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                                 } else {
                                     // Set loading down immediately
                                     drop(rust);
@@ -369,6 +355,7 @@ impl crate::ffi::MessageList {
                             } else {
                                 rust.cache.insert(convo_id.clone(), (new_messages, me_participant_id));
                             }
+                            eprintln!("[{}] MessageList: UI updated (diffed)", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                         },
                     );
 
@@ -392,6 +379,49 @@ impl crate::ffi::MessageList {
                                         });
                                     }
                                 }
+                            }
+                        });
+                    }
+
+                    // Start background avatar load
+                    if !identifiers_to_fetch.is_empty() {
+                        let ui_for_avatars = qt_thread.clone();
+                        let mapped_identifiers = avatar_identifiers.clone();
+                        let conversation_id_clone = conversation_id.clone();
+                        spawn(async move {
+                            if let Some(client_for_avatars) = get_client().await {
+                            let new_avatars = fetch_avatars_async(client_for_avatars, identifiers_to_fetch).await;
+                            if !new_avatars.is_empty() {
+                                let mut pid_to_url = HashMap::<String, String>::new();
+                                for (pid, id) in &mapped_identifiers {
+                                    if let Some(url) = new_avatars.get(id) {
+                                        pid_to_url.insert(pid.to_string(), url.to_string());
+                                    }
+                                }
+                                let _ = ui_for_avatars.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                                    let mut rust = qobject.as_mut().rust_mut();
+                                    if rust.selected_conversation_id == conversation_id_clone {
+                                        let mut changes = Vec::new();
+                                        for (pos, item) in rust.messages.iter_mut().enumerate() {
+                                            if !item.participant_id.is_empty() {
+                                                if let Some(url) = pid_to_url.get(&item.participant_id) {
+                                                    item.avatar_url = QString::from(url.as_str());
+                                                    changes.push(pos as i32);
+                                                }
+                                            }
+                                        }
+                                        let msgs = rust.messages.clone();
+                                        let me_id = rust.me_participant_id.clone();
+                                        rust.cache.insert(conversation_id_clone, (msgs, me_id));
+                                        drop(rust);
+                                        for pos in changes {
+                                            let model_index = qobject.as_ref().index(pos, 0, &QModelIndex::default());
+                                            qobject.as_mut().data_changed(&model_index, &model_index);
+                                        }
+                                        eprintln!("[{}] MessageList: Async avatars updated UI", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                                    }
+                                });
+                            }
                             }
                         });
                     }
@@ -444,6 +474,7 @@ impl crate::ffi::MessageList {
             is_media: false,
             avatar_url: QString::from(""),
             is_info: false,
+            participant_id: String::new(),
         });
         // We do not sort here because the new message naturally belongs at the end.
         // It prevents scroll position reset issues.
@@ -457,7 +488,6 @@ impl crate::ffi::MessageList {
             let result: Result<(), String> = async {
                 let client = ensure_client().await?;
                 let handler = make_handler(&client).await?;
-                let response_loop = start_handler_loop(&handler).await;
 
                 let message_info = libgmessages_rs::proto::conversations::MessageInfo {
                     action_message_id: None,
@@ -503,7 +533,6 @@ impl crate::ffi::MessageList {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                response_loop.abort();
                 Ok(())
             }
             .await;
@@ -626,6 +655,7 @@ impl crate::ffi::MessageList {
             is_media,
             avatar_url: QString::from(""),
             is_info: status_code >= 200,
+            participant_id: participant_id.clone(),
         };
 
         // Find insertion index (sorted by timestamp ascending)

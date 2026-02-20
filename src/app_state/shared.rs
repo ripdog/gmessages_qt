@@ -1,5 +1,6 @@
 use libgmessages_rs::{gmclient::GMClient, store::AuthDataStore};
 use std::sync::OnceLock;
+use base64::Engine;
 
 
 // ── Shared session infrastructure ────────────────────────────────
@@ -9,6 +10,8 @@ use std::sync::OnceLock;
 pub struct SharedSession {
     runtime: tokio::runtime::Runtime,
     client: tokio::sync::RwLock<Option<GMClient>>,
+    pub avatars: tokio::sync::RwLock<std::collections::HashMap<String, String>>,
+    pub handler: tokio::sync::RwLock<Option<libgmessages_rs::gmclient::SessionHandler>>,
 }
 
 /// Global singleton.
@@ -22,6 +25,8 @@ pub fn shared() -> &'static SharedSession {
         SharedSession {
             runtime,
             client: tokio::sync::RwLock::new(None),
+            avatars: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            handler: tokio::sync::RwLock::new(None),
         }
     })
 }
@@ -70,6 +75,11 @@ pub async fn ensure_client() -> Result<GMClient, String> {
 
 /// Create a SessionHandler from a client, set the session ID, and return it.
 pub async fn make_handler(client: &GMClient) -> Result<libgmessages_rs::gmclient::SessionHandler, String> {
+    let mut guard = shared().handler.write().await;
+    if let Some(h) = guard.as_ref() {
+        return Ok(h.clone());
+    }
+    
     let mut handler = libgmessages_rs::gmclient::SessionHandler::new(client.clone());
     let auth_handle = client.auth();
     let auth_session = {
@@ -77,30 +87,73 @@ pub async fn make_handler(client: &GMClient) -> Result<libgmessages_rs::gmclient
         auth.session_id().to_string().to_lowercase()
     };
     handler.set_session_id(auth_session).await;
+    
+    *guard = Some(handler.clone());
     Ok(handler)
 }
 
-/// Run the response loop + GetUpdates handshake for a handler, returning
-/// a JoinHandle that drives the response loop.  The caller should abort it
-/// when done with the handler.
-pub async fn start_handler_loop(
-    handler: &libgmessages_rs::gmclient::SessionHandler,
-) -> tokio::task::JoinHandle<()> {
-    let session_id = handler.session_id().to_string();
-    let _ = handler
-        .client()
-        .send_rpc_message_with_id_and_session_no_payload(
-            libgmessages_rs::proto::rpc::ActionType::GetUpdates,
-            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-            &session_id,
-            &session_id,
-            true,
-        )
-        .await;
 
-    let loop_handler = handler.clone();
-    tokio::spawn(async move {
-        let _ = loop_handler.start_response_loop().await;
-    })
+
+/// Helper: fetch avatars asynchronously and cache them.
+pub async fn fetch_avatars_async(
+    client: GMClient,
+    identifiers: Vec<String>,
+) -> std::collections::HashMap<String, String> {
+    let mut results = std::collections::HashMap::new();
+    let mut to_fetch = Vec::new();
+    {
+        let cache = shared().avatars.read().await;
+        for id in &identifiers {
+            if let Some(url) = cache.get(id) {
+                results.insert(id.clone(), url.clone());
+            } else {
+                if !to_fetch.contains(id) {
+                    to_fetch.push(id.clone());
+                }
+            }
+        }
+    }
+    if to_fetch.is_empty() {
+        return results;
+    }
+
+    if let Ok(handler) = make_handler(&client).await {
+        let request = libgmessages_rs::proto::client::GetThumbnailRequest {
+            identifiers: to_fetch.clone(),
+        };
+        let attempts = [
+            (true, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
+            (true, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
+            (false, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
+            (false, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
+            (false, libgmessages_rs::proto::rpc::MessageType::UnknownMessageType),
+        ];
+
+        for (encrypted, message_type) in attempts {
+            let attempt: Result<libgmessages_rs::proto::client::GetThumbnailResponse, _> = if encrypted {
+                handler.send_request(libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail, message_type, &request).await
+            } else {
+                handler.send_request_dont_encrypt(libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail, message_type, &request, std::time::Duration::from_secs(5)).await
+            };
+            if let Ok(response) = attempt {
+                if !response.thumbnail.is_empty() {
+                    let mut cache = shared().avatars.write().await;
+                    for thumb in response.thumbnail {
+                        if let Some(data) = thumb.data.as_ref() {
+                            if !data.image_buffer.is_empty() {
+                                let ext = crate::app_state::utils::detect_extension(&data.image_buffer);
+                                let encoded = base64::engine::general_purpose::STANDARD.encode(&data.image_buffer);
+                                let url = format!("data:image/{ext};base64,{encoded}");
+                                cache.insert(thumb.identifier.clone(), url.clone());
+                                results.insert(thumb.identifier.clone(), url);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    results
 }
-

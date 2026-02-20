@@ -1,18 +1,16 @@
 use crate::ffi;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use crate::ffi::QHash_i32_QByteArray;
 use crate::ffi::QModelIndex;
 use crate::ffi::QVariant;
 
 use super::*;
+use crate::app_state::shared::fetch_avatars_async;
 // ── ConversationList ─────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -90,9 +88,9 @@ impl crate::ffi::ConversationList {
 
         spawn(async move {
             let result: Result<(), String> = async {
+                eprintln!("[{}] ConversationList: Start load", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 let client = ensure_client().await?;
                 let handler = make_handler(&client).await?;
-                let response_loop = start_handler_loop(&handler).await;
 
                 let request =
                     libgmessages_rs::proto::client::ListConversationsRequest {
@@ -112,6 +110,8 @@ impl crate::ffi::ConversationList {
                         .await
                         .map_err(|e| e.to_string())?;
 
+                eprintln!("[{}] ConversationList: Request finished", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+
                 let mut items: Vec<ConversationItem> = response
                     .conversations
                     .into_iter()
@@ -120,19 +120,22 @@ impl crate::ffi::ConversationList {
 
                 items.sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
 
-                // Collect avatar identifiers
+                // Collect avatar identifiers and populate from cache if available
                 let mut avatar_identifiers: Vec<String> = Vec::new();
-                let mut avatar_by_identifier: HashMap<String, String> = HashMap::new();
-                for item in &items {
-                    if item.avatar_identifier.is_empty() {
-                        continue;
+                {
+                    let cache = shared().avatars.read().await;
+                    for item in &mut items {
+                        if item.avatar_identifier.is_empty() {
+                            continue;
+                        }
+                        if let Some(url) = cache.get(&item.avatar_identifier) {
+                            item.avatar_url = QString::from(url.as_str());
+                        } else {
+                            if !avatar_identifiers.contains(&item.avatar_identifier) {
+                                avatar_identifiers.push(item.avatar_identifier.clone());
+                            }
+                        }
                     }
-                    if avatar_by_identifier.contains_key(&item.avatar_identifier) {
-                        continue;
-                    }
-                    avatar_identifiers.push(item.avatar_identifier.clone());
-                    avatar_by_identifier
-                        .insert(item.avatar_identifier.clone(), String::new());
                 }
 
                 // Push items to UI immediately
@@ -141,104 +144,40 @@ impl crate::ffi::ConversationList {
                     let mut rust = qobject.as_mut().rust_mut();
                     rust.avatar_by_identifier.clear();
                     rust.all_items = items;
-                    rust.filtered_items =
-                        filter_items(&rust.all_items, &rust.filter_text);
+                    rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
                     qobject.as_mut().set_loading(false);
                     qobject.as_mut().end_reset_model();
+                    eprintln!("[{}] ConversationList: UI updated", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 });
 
-                // Fetch avatars
+                // Fetch missing avatars in background
                 if !avatar_identifiers.is_empty() {
-                    let request = libgmessages_rs::proto::client::GetThumbnailRequest {
-                        identifiers: avatar_identifiers.clone(),
-                    };
-                    let attempts = [
-                        (
-                            true,
-                            libgmessages_rs::proto::rpc::MessageType::BugleAnnotation,
-                        ),
-                        (
-                            true,
-                            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                        ),
-                        (
-                            false,
-                            libgmessages_rs::proto::rpc::MessageType::BugleAnnotation,
-                        ),
-                        (
-                            false,
-                            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                        ),
-                        (
-                            false,
-                            libgmessages_rs::proto::rpc::MessageType::UnknownMessageType,
-                        ),
-                    ];
-                    for (encrypted, message_type) in attempts {
-                        let attempt: Result<
-                            libgmessages_rs::proto::client::GetThumbnailResponse,
-                            _,
-                        > = if encrypted {
-                            handler
-                                .send_request(
-                                    libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail,
-                                    message_type,
-                                    &request,
-                                )
-                                .await
-                        } else {
-                            handler
-                                .send_request_dont_encrypt(
-                                    libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail,
-                                    message_type,
-                                    &request,
-                                    Duration::from_secs(5),
-                                )
-                                .await
-                        };
-                        if let Ok(response) = attempt {
-                            if response.thumbnail.is_empty() {
-                                continue;
-                            }
-                            for thumb in response.thumbnail {
-                                if let Some(data) = thumb.data.as_ref() {
-                                    if data.image_buffer.is_empty() {
-                                        continue;
-                                    }
-                                    let ext = detect_extension(&data.image_buffer);
-                                    let encoded = STANDARD.encode(&data.image_buffer);
-                                    let url = format!("data:image/{ext};base64,{encoded}");
-                                    avatar_by_identifier.insert(thumb.identifier, url);
+                    let client_for_avatars = client.clone();
+                    let ui_for_avatars = ui_thread.clone();
+                    spawn(async move {
+                        let new_avatars = fetch_avatars_async(client_for_avatars, avatar_identifiers).await;
+                        if !new_avatars.is_empty() {
+                            let _ = ui_for_avatars.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                                qobject.as_mut().begin_reset_model();
+                                let mut rust = qobject.as_mut().rust_mut();
+                                for (id, url) in &new_avatars {
+                                    rust.avatar_by_identifier.insert(id.clone(), url.clone());
                                 }
-                            }
-                            break;
+                                for item in &mut rust.all_items {
+                                    if let Some(url) = new_avatars.get(&item.avatar_identifier) {
+                                        if !url.is_empty() {
+                                            item.avatar_url = QString::from(url.as_str());
+                                        }
+                                    }
+                                }
+                                rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
+                                qobject.as_mut().end_reset_model();
+                                eprintln!("[{}] ConversationList: Async avatars updated UI", chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                            });
                         }
-                    }
+                    });
                 }
 
-                if !avatar_by_identifier.is_empty() {
-                    let _ = ui_thread.queue(
-                        move |mut qobject: Pin<&mut ffi::ConversationList>| {
-                            qobject.as_mut().begin_reset_model();
-                            let mut rust = qobject.as_mut().rust_mut();
-                            rust.avatar_by_identifier = avatar_by_identifier.clone();
-                            for item in &mut rust.all_items {
-                                if let Some(url) =
-                                    avatar_by_identifier.get(&item.avatar_identifier)
-                                {
-                                    if !url.is_empty() {
-                                        item.avatar_url = QString::from(url.as_str());
-                                    }
-                                }
-                            }
-                            rust.filtered_items =
-                                filter_items(&rust.all_items, &rust.filter_text);
-                            qobject.as_mut().end_reset_model();
-                        },
-                    );
-                }
-
-                response_loop.abort();
                 Ok(())
             }
             .await;
