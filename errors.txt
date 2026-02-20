@@ -1,0 +1,432 @@
+   Compiling gmessages_qt v0.1.0 (/home/ripdog/RustroverProjects/gmessages_qt)
+warning: unused import: `crate::ffi`
+ --> src/app_state/shared.rs:1:5
+  |
+1 | use crate::ffi;
+  |     ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `base64::engine::general_purpose::STANDARD`
+ --> src/app_state/shared.rs:2:5
+  |
+2 | use base64::engine::general_purpose::STANDARD;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `base64::Engine`
+ --> src/app_state/shared.rs:3:5
+  |
+3 | use base64::Engine;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `Datelike`, `Local`, and `Timelike`
+ --> src/app_state/shared.rs:4:14
+  |
+4 | use chrono::{Datelike, Local, Timelike};
+  |              ^^^^^^^^  ^^^^^  ^^^^^^^^
+
+warning: unused import: `core::pin::Pin`
+ --> src/app_state/shared.rs:5:5
+  |
+5 | use core::pin::Pin;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `CxxQtThread`, `CxxQtType`, and `Threading`
+ --> src/app_state/shared.rs:6:14
+  |
+6 | use cxx_qt::{CxxQtThread, CxxQtType, Threading};
+  |              ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `cxx_qt_lib::QString`
+ --> src/app_state/shared.rs:7:5
+  |
+7 | use cxx_qt_lib::QString;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures_util::StreamExt`
+ --> src/app_state/shared.rs:8:5
+  |
+8 | use futures_util::StreamExt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `auth::AuthData`
+ --> src/app_state/shared.rs:9:23
+  |
+9 | use libgmessages_rs::{auth::AuthData, gmclient::GMClient, store::AuthDataStore};
+  |                       ^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::render::svg`
+  --> src/app_state/shared.rs:10:5
+   |
+10 | use qrcode::render::svg;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::QrCode`
+  --> src/app_state/shared.rs:11:5
+   |
+11 | use qrcode::QrCode;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> src/app_state/shared.rs:12:5
+   |
+12 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Arc` and `atomic::AtomicBool`
+  --> src/app_state/shared.rs:13:17
+   |
+13 | use std::sync::{atomic::AtomicBool, Arc, OnceLock};
+   |                 ^^^^^^^^^^^^^^^^^^  ^^^
+
+warning: unused import: `std::time::Duration`
+  --> src/app_state/shared.rs:14:5
+   |
+14 | use std::time::Duration;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `uuid::Uuid`
+  --> src/app_state/shared.rs:15:5
+   |
+15 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QHash_i32_QByteArray`
+  --> src/app_state/shared.rs:17:5
+   |
+17 | use crate::ffi::QHash_i32_QByteArray;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QModelIndex`
+  --> src/app_state/shared.rs:18:5
+   |
+18 | use crate::ffi::QModelIndex;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QVariant`
+  --> src/app_state/shared.rs:19:5
+   |
+19 | use crate::ffi::QVariant;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::*`
+  --> src/app_state/shared.rs:21:5
+   |
+21 | use super::*;
+   |     ^^^^^^^^
+
+warning: unused import: `crate::ffi`
+ --> src/app_state/utils.rs:2:5
+  |
+2 | use crate::ffi;
+  |     ^^^^^^^^^^
+
+warning: unused import: `core::pin::Pin`
+ --> src/app_state/utils.rs:6:5
+  |
+6 | use core::pin::Pin;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `CxxQtThread`, `CxxQtType`, and `Threading`
+ --> src/app_state/utils.rs:7:14
+  |
+7 | use cxx_qt::{CxxQtThread, CxxQtType, Threading};
+  |              ^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `cxx_qt_lib::QString`
+ --> src/app_state/utils.rs:8:5
+  |
+8 | use cxx_qt_lib::QString;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `auth::AuthData`, `gmclient::GMClient`, and `store::AuthDataStore`
+  --> src/app_state/utils.rs:10:23
+   |
+10 | use libgmessages_rs::{auth::AuthData, gmclient::GMClient, store::AuthDataStore};
+   |                       ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> src/app_state/utils.rs:13:5
+   |
+13 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Arc`, `OnceLock`, and `atomic::AtomicBool`
+  --> src/app_state/utils.rs:14:17
+   |
+14 | use std::sync::{atomic::AtomicBool, Arc, OnceLock};
+   |                 ^^^^^^^^^^^^^^^^^^  ^^^  ^^^^^^^^
+
+warning: unused import: `std::time::Duration`
+  --> src/app_state/utils.rs:15:5
+   |
+15 | use std::time::Duration;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `uuid::Uuid`
+  --> src/app_state/utils.rs:16:5
+   |
+16 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QHash_i32_QByteArray`
+  --> src/app_state/utils.rs:18:5
+   |
+18 | use crate::ffi::QHash_i32_QByteArray;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QModelIndex`
+  --> src/app_state/utils.rs:19:5
+   |
+19 | use crate::ffi::QModelIndex;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QVariant`
+  --> src/app_state/utils.rs:20:5
+   |
+20 | use crate::ffi::QVariant;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::*`
+  --> src/app_state/utils.rs:22:5
+   |
+22 | use super::*;
+   |     ^^^^^^^^
+
+warning: unused import: `base64::engine::general_purpose::STANDARD`
+ --> src/app_state/app_state_impl.rs:2:5
+  |
+2 | use base64::engine::general_purpose::STANDARD;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `base64::Engine`
+ --> src/app_state/app_state_impl.rs:3:5
+  |
+3 | use base64::Engine;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `Datelike`, `Local`, and `Timelike`
+ --> src/app_state/app_state_impl.rs:4:14
+  |
+4 | use chrono::{Datelike, Local, Timelike};
+  |              ^^^^^^^^  ^^^^^  ^^^^^^^^
+
+warning: unused import: `futures_util::StreamExt`
+ --> src/app_state/app_state_impl.rs:8:5
+  |
+8 | use futures_util::StreamExt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::render::svg`
+  --> src/app_state/app_state_impl.rs:10:5
+   |
+10 | use qrcode::render::svg;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::QrCode`
+  --> src/app_state/app_state_impl.rs:11:5
+   |
+11 | use qrcode::QrCode;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> src/app_state/app_state_impl.rs:12:5
+   |
+12 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `OnceLock`
+  --> src/app_state/app_state_impl.rs:13:42
+   |
+13 | use std::sync::{atomic::AtomicBool, Arc, OnceLock};
+   |                                          ^^^^^^^^
+
+warning: unused import: `uuid::Uuid`
+  --> src/app_state/app_state_impl.rs:15:5
+   |
+15 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QHash_i32_QByteArray`
+  --> src/app_state/app_state_impl.rs:17:5
+   |
+17 | use crate::ffi::QHash_i32_QByteArray;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QModelIndex`
+  --> src/app_state/app_state_impl.rs:18:5
+   |
+18 | use crate::ffi::QModelIndex;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QVariant`
+  --> src/app_state/app_state_impl.rs:19:5
+   |
+19 | use crate::ffi::QVariant;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Datelike`, `Local`, and `Timelike`
+ --> src/app_state/session_controller.rs:4:14
+  |
+4 | use chrono::{Datelike, Local, Timelike};
+  |              ^^^^^^^^  ^^^^^  ^^^^^^^^
+
+warning: unused imports: `auth::AuthData`, `gmclient::GMClient`, and `store::AuthDataStore`
+ --> src/app_state/session_controller.rs:9:23
+  |
+9 | use libgmessages_rs::{auth::AuthData, gmclient::GMClient, store::AuthDataStore};
+  |                       ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::render::svg`
+  --> src/app_state/session_controller.rs:10:5
+   |
+10 | use qrcode::render::svg;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::QrCode`
+  --> src/app_state/session_controller.rs:11:5
+   |
+11 | use qrcode::QrCode;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+  --> src/app_state/session_controller.rs:12:5
+   |
+12 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `OnceLock`
+  --> src/app_state/session_controller.rs:13:42
+   |
+13 | use std::sync::{atomic::AtomicBool, Arc, OnceLock};
+   |                                          ^^^^^^^^
+
+warning: unused import: `uuid::Uuid`
+  --> src/app_state/session_controller.rs:15:5
+   |
+15 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QHash_i32_QByteArray`
+  --> src/app_state/session_controller.rs:17:5
+   |
+17 | use crate::ffi::QHash_i32_QByteArray;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QModelIndex`
+  --> src/app_state/session_controller.rs:18:5
+   |
+18 | use crate::ffi::QModelIndex;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ffi::QVariant`
+  --> src/app_state/session_controller.rs:19:5
+   |
+19 | use crate::ffi::QVariant;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Datelike`, `Local`, and `Timelike`
+ --> src/app_state/conversation_list.rs:4:14
+  |
+4 | use chrono::{Datelike, Local, Timelike};
+  |              ^^^^^^^^  ^^^^^  ^^^^^^^^
+
+warning: unused imports: `auth::AuthData`, `gmclient::GMClient`, and `store::AuthDataStore`
+ --> src/app_state/conversation_list.rs:9:23
+  |
+9 | use libgmessages_rs::{auth::AuthData, gmclient::GMClient, store::AuthDataStore};
+  |                       ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::render::svg`
+  --> src/app_state/conversation_list.rs:10:5
+   |
+10 | use qrcode::render::svg;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::QrCode`
+  --> src/app_state/conversation_list.rs:11:5
+   |
+11 | use qrcode::QrCode;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `Arc`, `OnceLock`, and `atomic::AtomicBool`
+  --> src/app_state/conversation_list.rs:13:17
+   |
+13 | use std::sync::{atomic::AtomicBool, Arc, OnceLock};
+   |                 ^^^^^^^^^^^^^^^^^^  ^^^  ^^^^^^^^
+
+warning: unused import: `uuid::Uuid`
+  --> src/app_state/conversation_list.rs:15:5
+   |
+15 | use uuid::Uuid;
+   |     ^^^^^^^^^^
+
+warning: unused imports: `Datelike`, `Local`, and `Timelike`
+ --> src/app_state/message_list.rs:4:14
+  |
+4 | use chrono::{Datelike, Local, Timelike};
+  |              ^^^^^^^^  ^^^^^  ^^^^^^^^
+
+warning: unused imports: `auth::AuthData` and `gmclient::GMClient`
+ --> src/app_state/message_list.rs:9:23
+  |
+9 | use libgmessages_rs::{auth::AuthData, gmclient::GMClient, store::AuthDataStore};
+  |                       ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::render::svg`
+  --> src/app_state/message_list.rs:10:5
+   |
+10 | use qrcode::render::svg;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `qrcode::QrCode`
+  --> src/app_state/message_list.rs:11:5
+   |
+11 | use qrcode::QrCode;
+   |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `Arc`, `OnceLock`, and `atomic::AtomicBool`
+  --> src/app_state/message_list.rs:13:17
+   |
+13 | use std::sync::{atomic::AtomicBool, Arc, OnceLock};
+   |                 ^^^^^^^^^^^^^^^^^^  ^^^  ^^^^^^^^
+
+warning: unused import: `std::time::Duration`
+  --> src/app_state/message_list.rs:14:5
+   |
+14 | use std::time::Duration;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+error[E0616]: field `name` of struct `ConversationItem` is private
+  --> src/app_state/utils.rs:47:29
+   |
+47 |             let name = item.name.to_string().to_lowercase();
+   |                             ^^^^ private field
+
+error[E0616]: field `preview` of struct `ConversationItem` is private
+  --> src/app_state/utils.rs:48:32
+   |
+48 |             let preview = item.preview.to_string().to_lowercase();
+   |                                ^^^^^^^ private field
+
+warning: unused import: `futures_util::StreamExt`
+ --> src/app_state/utils.rs:9:5
+  |
+9 | use futures_util::StreamExt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures_util::StreamExt`
+ --> src/app_state/conversation_list.rs:8:5
+  |
+8 | use futures_util::StreamExt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `futures_util::StreamExt`
+ --> src/app_state/message_list.rs:8:5
+  |
+8 | use futures_util::StreamExt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0616`.
+warning: `gmessages_qt` (lib) generated 69 warnings
+error: could not compile `gmessages_qt` (lib) due to 2 previous errors; 69 warnings emitted

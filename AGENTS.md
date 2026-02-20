@@ -21,3 +21,10 @@ Standards
 Learnings
 - For CXX-Qt: keep at least one `#[cxx_qt::bridge]` in `src/lib.rs` and include only `src/lib.rs` in `build.rs` `.files(...)`; referencing `src/main.rs` can break the build with `no #[cxx::bridge] module found`
 - For QR refresh: regenerate the QR by creating a fresh `AuthData` and new pairing stream each cycle; reusing the same auth keeps the QR unchanged and the pairing stream times out
+
+File Structure & Refactoring Rules
+- NEVER create mega-files!
+- Files (especially Rust and QML) should be kept strictly under 500-800 lines.
+- When you are prompted to create a new feature, always consider abstracting the logical sections out to separate files or modules to ensure files stay small and easy to navigate.
+- For Rust, modularize into `pub mod x` directories.
+- For QML, extract `Kirigami.Page`, `Controls.Dialog`, or complex `Item`/`Component`s into their own `.qml` files instead of inline `Component { }` blocks. Ensure dependency injection parameters (like context properties) are configured to keep it decoupled.
