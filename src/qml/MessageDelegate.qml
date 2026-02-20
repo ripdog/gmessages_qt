@@ -14,22 +14,43 @@ Item {
     required property string section_date
     required property string media_url
     required property bool is_media
+    required property string avatar_url
+    required property bool is_info
+    required property int transport_type
 
     width: ListView.view ? ListView.view.width : 0
     height: messageCol.implicitHeight
 
     readonly property bool isFailed: messageDelegate.status === "failed"
+    // 1=SMS, 2=Downloaded MMS, 3=Undownloaded MMS
+    readonly property bool isSms: messageDelegate.transport_type === 1 || messageDelegate.transport_type === 2 || messageDelegate.transport_type === 3
 
     ColumnLayout {
         id: messageCol
         width: parent.width
         spacing: Kirigami.Units.smallSpacing
 
+        // info message
+        Controls.Label {
+            Layout.alignment: Qt.AlignHCenter
+            Layout.topMargin: Kirigami.Units.smallSpacing
+            Layout.bottomMargin: Kirigami.Units.smallSpacing
+            visible: messageDelegate.is_info
+            text: messageDelegate.body
+            color: Kirigami.Theme.disabledTextColor
+            font.family: Kirigami.Theme.smallFont.family
+            font.pointSize: Kirigami.Theme.smallFont.pointSize + 1
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            Layout.maximumWidth: parent.width * 0.8
+        }
+
         // Bubble row with avatar
         RowLayout {
             Layout.fillWidth: true
             layoutDirection: messageDelegate.from_me ? Qt.RightToLeft : Qt.LeftToRight
             spacing: Kirigami.Units.smallSpacing
+            visible: !messageDelegate.is_info
 
             // Avatar circle
             Rectangle {
@@ -40,6 +61,14 @@ Item {
                 color: messageDelegate.from_me
                     ? Kirigami.Theme.highlightColor
                     : Kirigami.Theme.disabledTextColor
+                clip: true
+
+                Image {
+                    anchors.fill: parent
+                    source: messageDelegate.avatar_url
+                    fillMode: Image.PreserveAspectCrop
+                    visible: !messageDelegate.from_me && messageDelegate.avatar_url.length > 0
+                }
 
                 Controls.Label {
                     anchors.centerIn: parent
@@ -47,6 +76,7 @@ Item {
                     color: "white"
                     font.pixelSize: Math.round(parent.height * 0.45)
                     font.bold: true
+                    visible: messageDelegate.from_me || messageDelegate.avatar_url.length === 0
                 }
             }
 
@@ -61,12 +91,14 @@ Item {
                 )
                 implicitHeight: bubbleContent.implicitHeight + Kirigami.Units.gridUnit * 1
                 radius: Kirigami.Units.gridUnit * 0.5
+                
+                // Diff color for SMS vs RCS if sent by us
                 color: messageDelegate.isFailed
                     ? Qt.rgba(Kirigami.Theme.negativeTextColor.r,
                               Kirigami.Theme.negativeTextColor.g,
                               Kirigami.Theme.negativeTextColor.b, 0.15)
                     : messageDelegate.from_me
-                        ? Kirigami.Theme.highlightColor
+                        ? (messageDelegate.isSms ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.highlightColor)
                         : Kirigami.Theme.alternateBackgroundColor
                 border.width: messageDelegate.isFailed ? 1
                     : messageDelegate.from_me ? 0 : 1
@@ -118,7 +150,7 @@ Item {
                         color: messageDelegate.isFailed
                             ? Kirigami.Theme.negativeTextColor
                             : messageDelegate.from_me
-                                ? Kirigami.Theme.highlightedTextColor
+                                ? Kirigami.Theme.highlightedTextColor // white usually
                                 : Kirigami.Theme.textColor
                         wrapMode: Text.WordWrap
                         readOnly: true
@@ -150,7 +182,7 @@ Item {
             Layout.rightMargin: Kirigami.Units.largeSpacing
             Layout.leftMargin: Kirigami.Units.largeSpacing
             spacing: Kirigami.Units.smallSpacing
-            visible: messageDelegate.index === root.statusVisibleIndex
+            visible: !messageDelegate.is_info && messageDelegate.index === root.statusVisibleIndex
 
             Controls.Label {
                 text: messageDelegate.time

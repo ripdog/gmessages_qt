@@ -1,18 +1,12 @@
 use crate::ffi;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use chrono::{Datelike, Local, Timelike};
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
-use futures_util::StreamExt;
-use libgmessages_rs::{auth::AuthData, gmclient::GMClient, store::AuthDataStore};
-use qrcode::render::svg;
-use qrcode::QrCode;
+
 use std::collections::HashMap;
-use std::sync::{atomic::AtomicBool, Arc, OnceLock};
 use std::time::Duration;
-use uuid::Uuid;
 
 use crate::ffi::QHash_i32_QByteArray;
 use crate::ffi::QModelIndex;

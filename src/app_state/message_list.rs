@@ -1,16 +1,12 @@
 use crate::ffi;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use chrono::{Datelike, Local, Timelike};
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
-use futures_util::StreamExt;
-use libgmessages_rs::{auth::AuthData, gmclient::GMClient, store::AuthDataStore};
-use qrcode::render::svg;
-use qrcode::QrCode;
+
+use libgmessages_rs::store::AuthDataStore;
 use std::collections::HashMap;
-use std::sync::{atomic::AtomicBool, Arc, OnceLock};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -31,6 +27,8 @@ pub struct MessageItem {
     pub status: QString,
     pub media_url: QString,
     pub is_media: bool,
+    pub avatar_url: QString,
+    pub is_info: bool,
 }
 
 pub struct MessageListRust {
@@ -80,6 +78,8 @@ impl crate::ffi::MessageList {
             ))),
             8 => QVariant::from(&item.media_url),
             9 => QVariant::from(&item.is_media),
+            10 => QVariant::from(&item.avatar_url),
+            11 => QVariant::from(&item.is_info),
             _ => QVariant::default(),
         }
     }
@@ -96,6 +96,8 @@ impl crate::ffi::MessageList {
         roles.insert(7, "section_date".into());
         roles.insert(8, "media_url".into());
         roles.insert(9, "is_media".into());
+        roles.insert(10, "avatar_url".into());
+        roles.insert(11, "is_info".into());
         roles
     }
 
@@ -164,19 +166,65 @@ impl crate::ffi::MessageList {
                         .await
                         .map_err(|e| e.to_string())?;
 
-                let me_participant_id = convo_response
-                    .conversation
-                    .as_ref()
-                    .and_then(|convo| {
-                        convo.participants.iter().find_map(|p| {
-                            if p.is_me {
-                                p.id.as_ref().map(|id| id.participant_id.clone())
+                let mut me_participant_id = String::new();
+                let mut avatar_identifiers: Vec<(String, String)> = Vec::new();
+                
+                if let Some(convo) = convo_response.conversation.as_ref() {
+                    for p in &convo.participants {
+                        let pid = p.id.as_ref().map(|id| id.participant_id.clone()).unwrap_or_default();
+                        if p.is_me {
+                            me_participant_id = pid;
+                        } else {
+                            let identifier = if !p.contact_id.is_empty() {
+                                p.contact_id.clone()
                             } else {
-                                None
+                                pid.clone()
+                            };
+                            if !identifier.is_empty() {
+                                avatar_identifiers.push((pid, identifier));
                             }
-                        })
-                    })
-                    .unwrap_or_default();
+                        }
+                    }
+                }
+                
+                let mut avatar_by_participant_id: HashMap<String, String> = HashMap::new();
+                if !avatar_identifiers.is_empty() {
+                    let request = libgmessages_rs::proto::client::GetThumbnailRequest {
+                        identifiers: avatar_identifiers.iter().map(|(_, id)| id.clone()).collect(),
+                    };
+                    let attempts = [
+                        (true, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
+                        (true, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
+                        (false, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
+                        (false, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
+                        (false, libgmessages_rs::proto::rpc::MessageType::UnknownMessageType),
+                    ];
+                    for (encrypted, message_type) in attempts {
+                        let attempt: Result<libgmessages_rs::proto::client::GetThumbnailResponse, _> = if encrypted {
+                            handler.send_request(libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail, message_type, &request).await
+                        } else {
+                            handler.send_request_dont_encrypt(libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail, message_type, &request, Duration::from_secs(5)).await
+                        };
+                        if let Ok(response) = attempt {
+                            if !response.thumbnail.is_empty() {
+                                for thumb in response.thumbnail {
+                                    if let Some(data) = thumb.data.as_ref() {
+                                        if !data.image_buffer.is_empty() {
+                                            let ext = detect_extension(&data.image_buffer);
+                                            let encoded = STANDARD.encode(&data.image_buffer);
+                                            let url = format!("data:image/{ext};base64,{encoded}");
+                                            
+                                            if let Some((pid, _)) = avatar_identifiers.iter().find(|(_, id)| id == &thumb.identifier) {
+                                                avatar_by_participant_id.insert(pid.clone(), url);
+                                            }
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
 
                 response_loop.abort();
 
@@ -205,6 +253,13 @@ impl crate::ffi::MessageList {
                             media_downloads.push((message_id.clone(), id, key, mime));
                         }
 
+                        let mut avatar_url = String::new();
+                        if !from_me && !message.participant_id.is_empty() {
+                            if let Some(url) = avatar_by_participant_id.get(&message.participant_id) {
+                                avatar_url = url.clone();
+                            }
+                        }
+
                         Some(MessageItem {
                             body: QString::from(body),
                             from_me,
@@ -214,6 +269,8 @@ impl crate::ffi::MessageList {
                             status: QString::from(status),
                             media_url: QString::from(""),
                             is_media,
+                            avatar_url: QString::from(avatar_url.as_str()),
+                            is_info: status_code >= 200,
                         })
                     })
                     .collect();
@@ -385,6 +442,8 @@ impl crate::ffi::MessageList {
             status: QString::from("sending"),
             media_url: QString::from(""),
             is_media: false,
+            avatar_url: QString::from(""),
+            is_info: false,
         });
         // We do not sort here because the new message naturally belongs at the end.
         // It prevents scroll position reset issues.
@@ -565,6 +624,8 @@ impl crate::ffi::MessageList {
             status: QString::from(status),
             media_url: QString::from(""),
             is_media,
+            avatar_url: QString::from(""),
+            is_info: status_code >= 200,
         };
 
         // Find insertion index (sorted by timestamp ascending)
