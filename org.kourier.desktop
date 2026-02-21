@@ -1,9 +1,9 @@
 [Desktop Entry]
-Name=Google Messages
+Name=Kourier
 GenericName=Messaging Client
 Comment=Send and receive text messages
-Exec=gmessages_qt %u
-Icon=message-bubbles
+Exec=kourier %u
+Icon=kourier
 Type=Application
 Categories=Network;Chat;InstantMessaging;
 Terminal=false

@@ -1,5 +1,5 @@
 [package]
-name = "gmessages_qt"
+name = "kourier"
 version = "0.1.0"
 authors = [ "ripdog" ]
 edition = "2021"

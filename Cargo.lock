@@ -1016,26 +1016,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gmessages_qt"
-version = "0.1.0"
-dependencies = [
- "base64",
- "chrono",
- "cxx",
- "cxx-qt",
- "cxx-qt-build",
- "cxx-qt-lib",
- "cxx-qt-lib-extras",
- "dirs 6.0.0",
- "futures-util",
- "libgmessages-rs",
- "prost",
- "qrcode 0.14.1",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1442,6 +1422,26 @@ checksum = "8c942ebf8e95485ca0d52d97da7c5a2c387d0e7f0ba4c35e93bfcaee045955b3"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kourier"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "cxx",
+ "cxx-qt",
+ "cxx-qt-build",
+ "cxx-qt-lib",
+ "cxx-qt-lib-extras",
+ "dirs 6.0.0",
+ "futures-util",
+ "libgmessages-rs",
+ "prost",
+ "qrcode 0.14.1",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

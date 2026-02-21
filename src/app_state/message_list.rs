@@ -393,7 +393,7 @@ impl crate::ffi::MessageList {
                                     let safe_id = media_id.replace("/", "_").replace("+", "_").replace("=", "").replace("-", "_");
                                     let safe_id = if safe_id.is_empty() { msg_id.replace("-", "_") } else { safe_id };
                                     
-                                    let tmp_dir = std::env::temp_dir().join("gmessages_media");
+                                    let tmp_dir = std::env::temp_dir().join("kourier_media");
                                     let _ = std::fs::create_dir_all(&tmp_dir);
                                     let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
                                     
@@ -1085,7 +1085,7 @@ impl crate::ffi::MessageList {
                 let safe_id = if safe_id.is_empty() { msg_id.clone().replace("-", "_") } else { safe_id };
                 
                 let ext = crate::app_state::utils::mime_to_extension(&mime);
-                let tmp_dir = std::env::temp_dir().join("gmessages_media");
+                let tmp_dir = std::env::temp_dir().join("kourier_media");
                 let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
 
                 let uri = if !path.exists() {

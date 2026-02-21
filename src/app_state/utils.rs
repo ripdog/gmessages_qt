@@ -203,7 +203,7 @@ pub fn mime_to_extension(mime: &str) -> &str {
 /// Videos → file: URI (Qt MediaPlayer needs a real file).
 pub fn media_data_to_uri(data: &[u8], mime: &str, file_name: &str) -> String {
     let ext = mime_to_extension(mime);
-    let tmp_dir = std::env::temp_dir().join("gmessages_media");
+    let tmp_dir = std::env::temp_dir().join("kourier_media");
     let _ = std::fs::create_dir_all(&tmp_dir);
     let path = tmp_dir.join(format!("{}.{}", file_name, ext));
     

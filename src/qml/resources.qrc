@@ -4,5 +4,6 @@
         <file>../svg/sendingIcon.svg</file>
         <file>../svg/receivedIcon.svg</file>
         <file>../svg/readIcon.svg</file>
+        <file>../svg/kourier.svg</file>
     </qresource>
 </RCC>

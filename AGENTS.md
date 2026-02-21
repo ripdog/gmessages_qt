@@ -1,6 +1,6 @@
-gmessages_qt
+Kourier
 
-This is a Rust/CXX/Qt project using QML for the UI. It is a native KDE desktop client for Google Messages (the web UI for the Android app with SMS and RCS).
+This is a Rust/CXX/Qt project using QML for the UI. It is a native KDE desktop client for Google Messages (the web UI for the Android app with SMS and RCS). The old name was gmessages-qt.
 
 As this tech stack is rather obscure, there are various references for you to learn from here. 
 In /references/kirigami-gallery, the various QML widgets which Kirigami are showcased. Whereever possible, use a Kirigami widget.

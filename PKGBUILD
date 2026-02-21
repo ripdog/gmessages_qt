@@ -1,8 +1,8 @@
 # Maintainer: ripdog <ripdog@example.com>
-pkgname=gmessages-qt
+pkgname=kourier
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="A Kirigami-based Google Messages Client"
+pkgdesc="An unofficial native KDE client for Google Messages"
 arch=('x86_64' 'aarch64')
 license=('GPL-3.0-or-later')
 depends=('qt6-base' 'qt6-declarative' 'kirigami')

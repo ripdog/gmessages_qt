@@ -4,7 +4,7 @@ import QtQuick.Controls as Controls
 import org.kde.kirigami as Kirigami
 import org.kde.kirigamiaddons.delegates as Delegates
 import QtQuick.Dialogs
-import org.gmessages_qt
+import org.kourier
 import Qt.labs.platform as Platform
 
 Kirigami.ApplicationWindow {
@@ -25,8 +25,8 @@ Kirigami.ApplicationWindow {
     Platform.SystemTrayIcon {
         id: trayIcon
         visible: true
-        icon.name: "message" 
-        tooltip: "gmessages"
+        icon.source: "qrc:/svg/kourier.svg"
+        tooltip: "Kourier"
 
         menu: Platform.Menu {
             Platform.MenuItem {
@@ -58,7 +58,7 @@ Kirigami.ApplicationWindow {
         }
     }
 
-    title: selectedConversationName.length > 0 ? selectedConversationName + " — gmessages" : "gmessages"
+    title: selectedConversationName.length > 0 ? selectedConversationName + " — Kourier" : "Kourier"
 
     minimumWidth: Kirigami.Units.gridUnit * 25
     minimumHeight: Kirigami.Units.gridUnit * 20
@@ -122,7 +122,7 @@ Kirigami.ApplicationWindow {
         // The drawer needs at least one action or it might refuse to open
         actions: [
             Kirigami.Action {
-                text: "gmessages"
+                text: "Kourier"
                 enabled: false
             }
         ]
@@ -192,15 +192,15 @@ Kirigami.ApplicationWindow {
         id: welcomeComponent
 
         Kirigami.Page {
-            title: "gmessages"
+            title: "Welcome"
 
             Kirigami.PlaceholderMessage {
                 anchors.centerIn: parent
                 width: parent.width - Kirigami.Units.gridUnit * 4
 
-                icon.name: "message-new"
-                text: "Welcome to gmessages"
-                explanation: "Log in with your Google Messages account to get started."
+                icon.source: "qrc:/svg/kourier.svg"
+                text: "Welcome to Kourier"
+                explanation: "An unofficial native KDE client for Google Messages."
 
                 helpfulAction: Kirigami.Action {
                     icon.name: "system-log-in"
