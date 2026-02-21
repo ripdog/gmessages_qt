@@ -39,7 +39,7 @@ mod ffi {
         type AppState = super::AppStateRust;
 
         #[qinvokable]
-        fn start_login(self: Pin<&mut AppState>);
+        fn start_login(self: Pin<&mut AppState>, remember_device: bool);
 
         #[qinvokable]
         fn cancel_login(self: Pin<&mut AppState>);

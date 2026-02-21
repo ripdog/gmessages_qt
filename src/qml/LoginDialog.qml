@@ -12,7 +12,7 @@ Controls.Dialog {
     width: Math.min(root.width * 0.70, Kirigami.Units.gridUnit * 26)
 
     onOpened: {
-        appState.start_login()
+        appState.start_login(rememberDevice.checked)
         sessionController.start()
     }
 
@@ -45,6 +45,17 @@ Controls.Dialog {
                 text: "Waiting for QR…"
                 color: Kirigami.Theme.disabledTextColor
                 visible: appState.qr_svg_data_url.length === 0
+            }
+        }
+
+        Controls.CheckBox {
+            id: rememberDevice
+            text: "Remember this computer"
+            checked: true
+            Layout.alignment: Qt.AlignHCenter
+            onClicked: {
+                appState.cancel_login()
+                appState.start_login(checked)
             }
         }
     }
