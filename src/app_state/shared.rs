@@ -53,6 +53,7 @@ pub async fn set_client(client: GMClient) {
 /// Clear the stored client (logout / auth error).
 pub async fn clear_client() {
     *shared().client.write().await = None;
+    *shared().handler.write().await = None;
 }
 
 /// Helper: load auth from disk and create+store a GMClient.
@@ -142,8 +143,17 @@ pub async fn fetch_avatars_async(
                         if let Some(data) = thumb.data.as_ref() {
                             if !data.image_buffer.is_empty() {
                                 let ext = crate::app_state::utils::detect_extension(&data.image_buffer);
-                                let encoded = base64::engine::general_purpose::STANDARD.encode(&data.image_buffer);
-                                let url = format!("data:image/{ext};base64,{encoded}");
+                                
+                                let safe_id = thumb.identifier.replace("/", "_").replace("+", "_").replace("=", "").replace("-", "_");
+                                let safe_id = if safe_id.is_empty() { "unknown".to_string() } else { safe_id };
+                                
+                                let tmp_dir = std::env::temp_dir().join("kourier_avatars");
+                                let _ = std::fs::create_dir_all(&tmp_dir);
+                                let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
+                                
+                                let _ = std::fs::write(&path, &data.image_buffer);
+                                let url = format!("file://{}", path.to_string_lossy());
+                                
                                 cache.insert(thumb.identifier.clone(), url.clone());
                                 results.insert(thumb.identifier.clone(), url);
                             }

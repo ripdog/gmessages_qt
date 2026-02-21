@@ -159,6 +159,9 @@ Item {
                         fillMode: Image.PreserveAspectFit
                         source: messageDelegate.isVideo ? "" : messageDelegate.media_url
                         visible: messageDelegate.is_media && messageDelegate.media_url.length > 0 && !messageDelegate.isVideo
+                        sourceSize.width: 400
+                        sourceSize.height: 400
+                        asynchronous: true
 
                         MouseArea {
                             anchors.fill: parent
