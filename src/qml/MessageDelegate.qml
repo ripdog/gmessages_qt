@@ -20,6 +20,8 @@ Item {
     required property string mime_type
     required property string message_id
 
+    required property bool is_start_of_day
+
     width: ListView.view ? ListView.view.width : 0
     height: messageCol.implicitHeight
 
@@ -32,6 +34,30 @@ Item {
         id: messageCol
         width: parent.width
         spacing: Kirigami.Units.smallSpacing
+
+        // Date header
+        Item {
+            Layout.fillWidth: true
+            Layout.preferredHeight: sectionLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
+            visible: messageDelegate.is_start_of_day
+
+            Controls.Label {
+                id: sectionLabel
+                anchors.centerIn: parent
+                text: messageDelegate.section_date
+                font: Kirigami.Theme.smallFont
+                color: Kirigami.Theme.disabledTextColor
+
+                background: Rectangle {
+                    color: Kirigami.Theme.backgroundColor
+                    radius: height / 2
+                    x: -Kirigami.Units.largeSpacing
+                    y: -Math.round(Kirigami.Units.smallSpacing / 2)
+                    width: sectionLabel.implicitWidth + Kirigami.Units.largeSpacing * 2
+                    height: sectionLabel.implicitHeight + Kirigami.Units.smallSpacing
+                }
+            }
+        }
 
         // info message
         Controls.Label {

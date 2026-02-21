@@ -85,6 +85,17 @@ impl crate::ffi::MessageList {
             10 => QVariant::from(&item.avatar_url),
             11 => QVariant::from(&item.is_info),
             12 => QVariant::from(&item.mime_type),
+            13 => {
+                let is_start = if row + 1 < self.messages.len() {
+                    let next_item = &self.messages[row + 1];
+                    let current_date = format_section_date(item.timestamp_micros);
+                    let next_date = format_section_date(next_item.timestamp_micros);
+                    current_date != next_date
+                } else {
+                    true
+                };
+                QVariant::from(&is_start)
+            },
             _ => QVariant::default(),
         }
     }
@@ -104,6 +115,7 @@ impl crate::ffi::MessageList {
         roles.insert(10, "avatar_url".into());
         roles.insert(11, "is_info".into());
         roles.insert(12, "mime_type".into());
+        roles.insert(13, "is_start_of_day".into());
         roles
     }
 
@@ -262,7 +274,7 @@ impl crate::ffi::MessageList {
                     })
                     .collect();
 
-                messages.sort_by_key(|item| item.timestamp_micros);
+                messages.sort_by(|a, b| b.timestamp_micros.cmp(&a.timestamp_micros));
 
                 // Mark conversation as read
                 if let Some(last_msg) = messages.last() {
@@ -338,7 +350,7 @@ impl crate::ffi::MessageList {
                                             }
                                         } else {
                                             // Insert
-                                            let pos = rust.messages.partition_point(|item| item.timestamp_micros <= new_msg.timestamp_micros);
+                                            let pos = rust.messages.partition_point(|item| item.timestamp_micros >= new_msg.timestamp_micros);
                                             drop(rust);
                                             qobject.as_mut().begin_insert_rows(&QModelIndex::default(), pos as i32, pos as i32);
                                             let mut rust = qobject.as_mut().rust_mut();
@@ -365,8 +377,27 @@ impl crate::ffi::MessageList {
                         spawn(async move {
                             if let Some(client) = get_client().await {
                                 for (msg_id, media_id, key, mime) in media_downloads {
-                                    if let Ok(data) = client.download_media(&media_id, &key).await {
-                                        let uri = crate::app_state::utils::media_data_to_uri(&data, &mime);
+                                    let ext = crate::app_state::utils::mime_to_extension(&mime);
+                                    let safe_id = media_id.replace("/", "_").replace("+", "_").replace("=", "").replace("-", "_");
+                                    let safe_id = if safe_id.is_empty() { msg_id.replace("-", "_") } else { safe_id };
+                                    
+                                    let tmp_dir = std::env::temp_dir().join("gmessages_media");
+                                    let _ = std::fs::create_dir_all(&tmp_dir);
+                                    let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
+                                    
+                                    if path.exists() {
+                                        let uri = format!("file://{}", path.to_string_lossy());
+                                        let _ = ui_for_media.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                                            let mut rust = qobject.as_mut().rust_mut();
+                                            if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
+                                                rust.messages[pos].media_url = QString::from(uri.as_str());
+                                                drop(rust);
+                                                let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
+                                                qobject.as_mut().data_changed(&model_index, &model_index);
+                                            }
+                                        });
+                                    } else if let Ok(data) = client.download_media(&media_id, &key).await {
+                                        let uri = crate::app_state::utils::media_data_to_uri(&data, &mime, &safe_id);
                                         let _ = ui_for_media.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                                             let mut rust = qobject.as_mut().rust_mut();
                                             if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
@@ -458,10 +489,10 @@ impl crate::ffi::MessageList {
         let tmp_id = Uuid::new_v4().to_string().to_lowercase();
 
         // Optimistic insert
-        let insert_pos = self.rust().messages.len() as i32;
+        let insert_pos = 0;
         self.as_mut().begin_insert_rows(&QModelIndex::default(), insert_pos, insert_pos);
         let mut rust = self.as_mut().rust_mut();
-        rust.messages.push(MessageItem {
+        rust.messages.insert(0, MessageItem {
             body: QString::from(body.clone()),
             from_me: true,
             transport_type: 4,
@@ -475,7 +506,7 @@ impl crate::ffi::MessageList {
             participant_id: String::new(),
             mime_type: QString::from(""),
         });
-        // We do not sort here because the new message naturally belongs at the end.
+        // We do not sort here because the new message naturally belongs at the beginning (index 0).
         // It prevents scroll position reset issues.
         drop(rust);
         self.as_mut().end_insert_rows();
@@ -610,14 +641,14 @@ impl crate::ffi::MessageList {
             _ => "application/octet-stream",
         }.to_string();
 
-        let preview_uri = crate::app_state::utils::media_data_to_uri(&bytes, &mime_type);
+        let preview_uri = crate::app_state::utils::media_data_to_uri(&bytes, &mime_type, &tmp_id);
 
         let body_text = if caption.is_empty() { String::new() } else { caption.clone() };
 
-        let insert_pos = self.rust().messages.len() as i32;
+        let insert_pos = 0;
         self.as_mut().begin_insert_rows(&QModelIndex::default(), insert_pos, insert_pos);
         let mut rust = self.as_mut().rust_mut();
-        rust.messages.push(MessageItem {
+        rust.messages.insert(0, MessageItem {
             body: QString::from(body_text.as_str()), 
             from_me: true,
             transport_type: 4,
@@ -891,8 +922,22 @@ impl crate::ffi::MessageList {
         spawn(async move {
             if let Some(client) = get_client().await {
                 let key_bytes = STANDARD.decode(&key).unwrap_or_default();
-                if let Ok(data) = client.download_media(&med_id, &key_bytes).await {
-                    let uri = crate::app_state::utils::media_data_to_uri(&data, &mime);
+                let safe_id = med_id.replace("/", "_").replace("+", "_").replace("=", "").replace("-", "_");
+                let safe_id = if safe_id.is_empty() { msg_id.clone().replace("-", "_") } else { safe_id };
+                
+                let ext = crate::app_state::utils::mime_to_extension(&mime);
+                let tmp_dir = std::env::temp_dir().join("gmessages_media");
+                let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
+
+                let uri = if path.exists() {
+                    Some(format!("file://{}", path.to_string_lossy()))
+                } else if let Ok(data) = client.download_media(&med_id, &key_bytes).await {
+                    Some(crate::app_state::utils::media_data_to_uri(&data, &mime, &safe_id))
+                } else {
+                    None
+                };
+
+                if let Some(uri) = uri {
                     let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                         let mut rust = qobject.as_mut().rust_mut();
                         if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {

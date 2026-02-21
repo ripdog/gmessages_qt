@@ -375,38 +375,13 @@ Kirigami.ApplicationWindow {
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
                         bottomMargin: Kirigami.Units.gridUnit
-                        verticalLayoutDirection: ListView.TopToBottom
+                        verticalLayoutDirection: ListView.BottomToTop
                         spacing: Kirigami.Units.mediumSpacing
                         visible: !root.messageListModel.loading && root.selectedConversationIndex >= 0
 
-                        // Date section headers
-                        section.property: "section_date"
-                        section.delegate: Item {
-                            required property string section
-                            width: ListView.view ? ListView.view.width : 0
-                            height: sectionLabel.implicitHeight + Kirigami.Units.largeSpacing * 2
-
-                            Controls.Label {
-                                id: sectionLabel
-                                anchors.centerIn: parent
-                                text: parent.section
-                                font: Kirigami.Theme.smallFont
-                                color: Kirigami.Theme.disabledTextColor
-
-                                background: Rectangle {
-                                    color: Kirigami.Theme.backgroundColor
-                                    radius: height / 2
-                                    x: -Kirigami.Units.largeSpacing
-                                    y: -Math.round(Kirigami.Units.smallSpacing / 2)
-                                    width: sectionLabel.implicitWidth + Kirigami.Units.largeSpacing * 2
-                                    height: sectionLabel.implicitHeight + Kirigami.Units.smallSpacing
-                                }
-                            }
-                        }
-
                         // Smart scroll: only auto-scroll when user is already at the bottom
                         onContentYChanged: {
-                            root.userAtBottom = atYEnd
+                            root.userAtBottom = atYBeginning
                         }
 
                         onCountChanged: {
@@ -414,7 +389,7 @@ Kirigami.ApplicationWindow {
                                 scrollTimer.restart()
                             }
                             if (!root.messageListModel.loading && count > root.lastMessageCount) {
-                                root.statusVisibleIndex = count - 1
+                                root.statusVisibleIndex = 0
                             }
                             root.lastMessageCount = count
                         }
@@ -435,7 +410,7 @@ Kirigami.ApplicationWindow {
                             interval: 100
                             repeat: false
                             onTriggered: {
-                                messageList.positionViewAtEnd()
+                                messageList.positionViewAtBeginning()
                                 root.userAtBottom = true
                             }
                         }
@@ -455,7 +430,7 @@ Kirigami.ApplicationWindow {
                         icon.name: "go-down"
                         visible: !root.userAtBottom && messageList.visible && messageList.count > 0
                         onClicked: {
-                            messageList.positionViewAtEnd()
+                            messageList.positionViewAtBeginning()
                             root.userAtBottom = true
                         }
                         z: 1
