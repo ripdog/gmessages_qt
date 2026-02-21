@@ -19,6 +19,7 @@ Item {
     required property int transport_type
     required property string mime_type
     required property string message_id
+    required property string thumbnail_url
 
     required property bool is_start_of_day
 
@@ -181,6 +182,20 @@ Item {
                             anchors.fill: parent
                             color: Qt.rgba(0, 0, 0, 0.3)
                             radius: Kirigami.Units.smallSpacing
+                            clip: true
+
+                            Image {
+                                anchors.fill: parent
+                                source: messageDelegate.thumbnail_url
+                                fillMode: Image.PreserveAspectCrop
+                                visible: messageDelegate.thumbnail_url.length > 0
+                            }
+
+                            // Dark overlay to make the play button and text readable
+                            Rectangle {
+                                anchors.fill: parent
+                                color: Qt.rgba(0, 0, 0, 0.3)
+                            }
 
                             // Play button overlay
                             Rectangle {

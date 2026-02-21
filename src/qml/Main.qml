@@ -508,6 +508,7 @@ Kirigami.ApplicationWindow {
                             id: thumbContainer
                             required property int index
                             required property string fileUrl
+                            required property string thumbUrl
 
                             readonly property bool isVideoFile: {
                                 const lower = thumbContainer.fileUrl.toLowerCase()
@@ -521,18 +522,18 @@ Kirigami.ApplicationWindow {
                             color: Kirigami.Theme.alternateBackgroundColor
                             clip: true
 
-                            // Image thumbnail (non-video only)
+                            // Image thumbnail
                             Image {
                                 anchors.fill: parent
-                                source: thumbContainer.isVideoFile ? "" : thumbContainer.fileUrl
+                                source: thumbContainer.isVideoFile ? thumbContainer.thumbUrl : thumbContainer.fileUrl
                                 fillMode: Image.PreserveAspectCrop
                                 asynchronous: true
                                 sourceSize.width: Kirigami.Units.gridUnit * 5
                                 sourceSize.height: Kirigami.Units.gridUnit * 5
-                                visible: !thumbContainer.isVideoFile
+                                visible: source.toString().length > 0
                             }
 
-                            // Video placeholder
+                            // Video play button overlay
                             Item {
                                 anchors.fill: parent
                                 visible: thumbContainer.isVideoFile
@@ -681,7 +682,12 @@ Kirigami.ApplicationWindow {
         onAccepted: {
             const url = String(attachmentDialog.selectedFile || attachmentDialog.currentFile);
             if (url.length > 0) {
-                stagedAttachments.append({ fileUrl: url });
+                let thumb = "";
+                const lower = url.toLowerCase();
+                if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".3gp") || lower.endsWith(".3g2")) {
+                    thumb = root.messageListModel.get_video_thumbnail(url);
+                }
+                stagedAttachments.append({ fileUrl: url, thumbUrl: thumb });
             }
         }
     }

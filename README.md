@@ -19,6 +19,9 @@ A native KDE desktop client for Google Messages (SMS/RCS), built with Rust, CXX-
 - Qt6 (`qt6-base`, `qt6-declarative`)
 - KDE Kirigami (`kirigami`)
 
+### Optional Runtime Dependencies
+- FFmpeg (`ffmpeg`): Required for generating and displaying video thumbnails.
+
 ## Building & Installation
 
 ### Arch Linux (Recommended)

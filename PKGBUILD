@@ -6,6 +6,7 @@ pkgdesc="A Kirigami-based Google Messages Client"
 arch=('x86_64' 'aarch64')
 license=('GPL-3.0-or-later')
 depends=('qt6-base' 'qt6-declarative' 'kirigami')
+optdepends=('ffmpeg: Video thumbnail generation')
 makedepends=('cargo' 'cmake' 'extra-cmake-modules')
 source=()
 options=('!lto' '!buildflags')

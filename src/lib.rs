@@ -209,6 +209,9 @@ mod ffi {
         fn send_media(self: Pin<&mut MessageList>, file_url: &QString, text: &QString);
 
         #[qinvokable]
+        fn get_video_thumbnail(self: &MessageList, file_url: &QString) -> QString;
+
+        #[qinvokable]
         fn send_typing(self: Pin<&mut MessageList>, typing: bool);
 
         #[qinvokable]

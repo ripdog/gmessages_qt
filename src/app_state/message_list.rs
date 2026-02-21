@@ -33,6 +33,7 @@ pub struct MessageItem {
     pub is_info: bool,
     pub participant_id: String,
     pub mime_type: QString,
+    pub thumbnail_url: QString,
 }
 
 pub struct MessageListRust {
@@ -96,6 +97,7 @@ impl crate::ffi::MessageList {
                 };
                 QVariant::from(&is_start)
             },
+            14 => QVariant::from(&item.thumbnail_url),
             _ => QVariant::default(),
         }
     }
@@ -116,6 +118,7 @@ impl crate::ffi::MessageList {
         roles.insert(11, "is_info".into());
         roles.insert(12, "mime_type".into());
         roles.insert(13, "is_start_of_day".into());
+        roles.insert(14, "thumbnail_url".into());
         roles
     }
 
@@ -270,6 +273,7 @@ impl crate::ffi::MessageList {
                             is_info: status_code >= 200,
                             participant_id: message.participant_id.clone(),
                             mime_type: QString::from(media_mime.as_str()),
+                            thumbnail_url: QString::from(""),
                         })
                     })
                     .collect();
@@ -385,23 +389,26 @@ impl crate::ffi::MessageList {
                                     let _ = std::fs::create_dir_all(&tmp_dir);
                                     let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
                                     
+                                    if !path.exists() {
+                                        if let Ok(data) = client.download_media(&media_id, &key).await {
+                                            let _ = crate::app_state::utils::media_data_to_uri(&data, &mime, &safe_id);
+                                        }
+                                    }
+                                    
                                     if path.exists() {
                                         let uri = format!("file://{}", path.to_string_lossy());
+                                        let thumb_uri = if mime.starts_with("video/") {
+                                            crate::app_state::utils::generate_video_thumbnail(&path).unwrap_or_default()
+                                        } else {
+                                            String::new()
+                                        };
                                         let _ = ui_for_media.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                                             let mut rust = qobject.as_mut().rust_mut();
                                             if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
                                                 rust.messages[pos].media_url = QString::from(uri.as_str());
-                                                drop(rust);
-                                                let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
-                                                qobject.as_mut().data_changed(&model_index, &model_index);
-                                            }
-                                        });
-                                    } else if let Ok(data) = client.download_media(&media_id, &key).await {
-                                        let uri = crate::app_state::utils::media_data_to_uri(&data, &mime, &safe_id);
-                                        let _ = ui_for_media.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
-                                            let mut rust = qobject.as_mut().rust_mut();
-                                            if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
-                                                rust.messages[pos].media_url = QString::from(uri.as_str());
+                                                if !thumb_uri.is_empty() {
+                                                    rust.messages[pos].thumbnail_url = QString::from(thumb_uri.as_str());
+                                                }
                                                 drop(rust);
                                                 let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
                                                 qobject.as_mut().data_changed(&model_index, &model_index);
@@ -505,6 +512,7 @@ impl crate::ffi::MessageList {
             is_info: false,
             participant_id: String::new(),
             mime_type: QString::from(""),
+            thumbnail_url: QString::from(""),
         });
         // We do not sort here because the new message naturally belongs at the beginning (index 0).
         // It prevents scroll position reset issues.
@@ -643,6 +651,12 @@ impl crate::ffi::MessageList {
 
         let preview_uri = crate::app_state::utils::media_data_to_uri(&bytes, &mime_type, &tmp_id);
 
+        let thumb_uri = if mime_type.starts_with("video/") {
+            crate::app_state::utils::generate_video_thumbnail(path_obj).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
         let body_text = if caption.is_empty() { String::new() } else { caption.clone() };
 
         let insert_pos = 0;
@@ -661,6 +675,7 @@ impl crate::ffi::MessageList {
             is_info: false,
             participant_id: String::new(),
             mime_type: QString::from(mime_type.as_str()),
+            thumbnail_url: QString::from(thumb_uri.as_str()),
         });
         drop(rust);
         self.as_mut().end_insert_rows();
@@ -780,6 +795,18 @@ impl crate::ffi::MessageList {
         });
     }
 
+    pub fn get_video_thumbnail(&self, file_url: &QString) -> QString {
+        let file_path = file_url.to_string();
+        let path = if file_path.starts_with("file://") {
+            file_path[7..].to_string()
+        } else {
+            file_path
+        };
+        let p = std::path::Path::new(&path);
+        let ret = crate::app_state::utils::generate_video_thumbnail(p).unwrap_or_default();
+        QString::from(ret.as_str())
+    }
+
     pub fn send_typing(self: Pin<&mut Self>, typing: bool) {
         let conversation_id = self.rust().selected_conversation_id.clone();
         if conversation_id.is_empty() {
@@ -879,6 +906,7 @@ impl crate::ffi::MessageList {
             is_info: status_code >= 200,
             participant_id: participant_id.clone(),
             mime_type: QString::from(""),
+            thumbnail_url: QString::from(""),
         };
 
         // Find insertion index (sorted by timestamp ascending)
@@ -929,10 +957,18 @@ impl crate::ffi::MessageList {
                 let tmp_dir = std::env::temp_dir().join("gmessages_media");
                 let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
 
-                let uri = if path.exists() {
+                let uri = if !path.exists() {
+                    if let Ok(data) = client.download_media(&med_id, &key_bytes).await {
+                        Some(crate::app_state::utils::media_data_to_uri(&data, &mime, &safe_id))
+                    } else {
+                        None
+                    }
+                } else {
                     Some(format!("file://{}", path.to_string_lossy()))
-                } else if let Ok(data) = client.download_media(&med_id, &key_bytes).await {
-                    Some(crate::app_state::utils::media_data_to_uri(&data, &mime, &safe_id))
+                };
+
+                let thumb_uri = if path.exists() && mime.starts_with("video/") {
+                    crate::app_state::utils::generate_video_thumbnail(&path)
                 } else {
                     None
                 };
@@ -942,6 +978,9 @@ impl crate::ffi::MessageList {
                         let mut rust = qobject.as_mut().rust_mut();
                         if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
                             rust.messages[pos].media_url = QString::from(uri.as_str());
+                            if let Some(t) = &thumb_uri {
+                                rust.messages[pos].thumbnail_url = QString::from(t.as_str());
+                            }
                             drop(rust);
                             let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
                             qobject.as_mut().data_changed(&model_index, &model_index);

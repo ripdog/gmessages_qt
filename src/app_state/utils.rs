@@ -218,3 +218,27 @@ pub fn media_data_to_uri(data: &[u8], mime: &str, file_name: &str) -> String {
         }
     }
 }
+
+pub fn generate_video_thumbnail(video_path: &std::path::Path) -> Option<String> {
+    let thumb_path = video_path.with_extension("thumb.jpg");
+    if thumb_path.exists() {
+        return Some(format!("file://{}", thumb_path.to_string_lossy()));
+    }
+    
+    let output = std::process::Command::new("ffmpeg")
+        .args(&[
+            "-y",
+            "-i", &video_path.to_string_lossy().into_owned(),
+            "-vframes", "1",
+            "-q:v", "2",
+            &thumb_path.to_string_lossy().into_owned(),
+        ])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        Some(format!("file://{}", thumb_path.to_string_lossy()))
+    } else {
+        None
+    }
+}
