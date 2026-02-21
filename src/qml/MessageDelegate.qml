@@ -20,6 +20,7 @@ Item {
     required property string mime_type
     required property string message_id
     required property string thumbnail_url
+    required property real upload_progress
 
     required property bool is_start_of_day
 
@@ -27,6 +28,7 @@ Item {
     height: messageCol.implicitHeight
 
     readonly property bool isFailed: messageDelegate.status === "failed"
+    readonly property bool isSending: messageDelegate.status === "sending"
     // 1=SMS, 2=Downloaded MMS, 3=Undownloaded MMS
     readonly property bool isSms: messageDelegate.transport_type === 1 || messageDelegate.transport_type === 2 || messageDelegate.transport_type === 3
     readonly property bool isVideo: messageDelegate.mime_type.startsWith("video/")
@@ -168,6 +170,44 @@ Item {
                                 mediaViewerDialog.open()
                             }
                         }
+
+                        Controls.ProgressBar {
+                            anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.margins: Kirigami.Units.smallSpacing
+                            from: 0
+                            to: 1
+                            value: messageDelegate.upload_progress
+                            indeterminate: messageDelegate.upload_progress === 0.0
+                            visible: messageDelegate.isSending && messageDelegate.upload_progress < 1.0
+                        }
+
+                        // Cancel upload button
+                        Rectangle {
+                            anchors.top: parent.top
+                            anchors.right: parent.right
+                            anchors.margins: Kirigami.Units.smallSpacing
+                            width: Kirigami.Units.gridUnit * 1.5
+                            height: Kirigami.Units.gridUnit * 1.5
+                            radius: width / 2
+                            color: Qt.rgba(0.8, 0.1, 0.1, 0.85)
+                            visible: messageDelegate.isSending
+
+                            Kirigami.Icon {
+                                anchors.centerIn: parent
+                                width: Kirigami.Units.iconSizes.small
+                                height: Kirigami.Units.iconSizes.small
+                                source: "dialog-close"
+                                color: "white"
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: messageListModel.delete_message(messageDelegate.message_id)
+                            }
+                        }
                     }
 
                     // ── Video media (thumbnail with play overlay) ──
@@ -222,6 +262,44 @@ Item {
                                 text: "Video"
                                 color: "white"
                                 font: Kirigami.Theme.smallFont
+                            }
+
+                            Controls.ProgressBar {
+                                anchors.bottom: parent.bottom
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.margins: Kirigami.Units.smallSpacing
+                                from: 0
+                                to: 1
+                                value: messageDelegate.upload_progress
+                                indeterminate: messageDelegate.upload_progress === 0.0
+                                visible: messageDelegate.isSending && messageDelegate.upload_progress < 1.0
+                            }
+
+                            // Cancel upload button
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.right: parent.right
+                                anchors.margins: Kirigami.Units.smallSpacing
+                                width: Kirigami.Units.gridUnit * 1.5
+                                height: Kirigami.Units.gridUnit * 1.5
+                                radius: width / 2
+                                color: Qt.rgba(0.8, 0.1, 0.1, 0.85)
+                                visible: messageDelegate.isSending
+
+                                Kirigami.Icon {
+                                    anchors.centerIn: parent
+                                    width: Kirigami.Units.iconSizes.small
+                                    height: Kirigami.Units.iconSizes.small
+                                    source: "dialog-close"
+                                    color: "white"
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: messageListModel.delete_message(messageDelegate.message_id)
+                                }
                             }
                         }
 

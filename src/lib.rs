@@ -212,6 +212,9 @@ mod ffi {
         fn get_video_thumbnail(self: &MessageList, file_url: &QString) -> QString;
 
         #[qinvokable]
+        fn get_file_size(self: &MessageList, file_url: &QString) -> i64;
+
+        #[qinvokable]
         fn send_typing(self: Pin<&mut MessageList>, typing: bool);
 
         #[qinvokable]

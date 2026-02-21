@@ -682,6 +682,22 @@ Kirigami.ApplicationWindow {
         onAccepted: {
             const url = String(attachmentDialog.selectedFile || attachmentDialog.currentFile);
             if (url.length > 0) {
+                // Check file size via Rust FFI (fs::metadata — instant, no file read)
+                const maxBytes = 100 * 1024 * 1024; // 100 MB RCS limit
+                const size = root.messageListModel.get_file_size(url);
+                if (size < 0) {
+                    root.showPassiveNotification("Could not read file info", "short");
+                    return;
+                }
+                if (size > maxBytes) {
+                    const sizeMB = (size / 1048576).toFixed(1);
+                    root.showPassiveNotification(
+                        `File too large: ${sizeMB} MB (RCS limit is 100 MB)`,
+                        "long"
+                    );
+                    return;
+                }
+
                 let thumb = "";
                 const lower = url.toLowerCase();
                 if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.endsWith(".3gp") || lower.endsWith(".3g2")) {

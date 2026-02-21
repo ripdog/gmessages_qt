@@ -9,6 +9,8 @@ use cxx_qt_lib::QString;
 use libgmessages_rs::store::AuthDataStore;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
 use crate::ffi::QHash_i32_QByteArray;
@@ -34,6 +36,7 @@ pub struct MessageItem {
     pub participant_id: String,
     pub mime_type: QString,
     pub thumbnail_url: QString,
+    pub upload_progress: f32,
 }
 
 pub struct MessageListRust {
@@ -42,6 +45,7 @@ pub struct MessageListRust {
     selected_conversation_id: String,
     me_participant_id: String,
     cache: HashMap<String, (Vec<MessageItem>, String)>,
+    upload_cancellations: HashMap<String, Arc<AtomicBool>>,
 }
 
 impl Default for MessageListRust {
@@ -52,6 +56,7 @@ impl Default for MessageListRust {
             selected_conversation_id: String::new(),
             me_participant_id: String::new(),
             cache: HashMap::new(),
+            upload_cancellations: HashMap::new(),
         }
     }
 }
@@ -98,6 +103,7 @@ impl crate::ffi::MessageList {
                 QVariant::from(&is_start)
             },
             14 => QVariant::from(&item.thumbnail_url),
+            15 => QVariant::from(&item.upload_progress),
             _ => QVariant::default(),
         }
     }
@@ -119,6 +125,7 @@ impl crate::ffi::MessageList {
         roles.insert(12, "mime_type".into());
         roles.insert(13, "is_start_of_day".into());
         roles.insert(14, "thumbnail_url".into());
+        roles.insert(15, "upload_progress".into());
         roles
     }
 
@@ -274,6 +281,7 @@ impl crate::ffi::MessageList {
                             participant_id: message.participant_id.clone(),
                             mime_type: QString::from(media_mime.as_str()),
                             thumbnail_url: QString::from(""),
+                            upload_progress: 1.0,
                         })
                     })
                     .collect();
@@ -513,6 +521,7 @@ impl crate::ffi::MessageList {
             participant_id: String::new(),
             mime_type: QString::from(""),
             thumbnail_url: QString::from(""),
+            upload_progress: 1.0,
         });
         // We do not sort here because the new message naturally belongs at the beginning (index 0).
         // It prevents scroll position reset issues.
@@ -629,13 +638,25 @@ impl crate::ffi::MessageList {
         let now_micros = chrono::Utc::now().timestamp_micros();
         let tmp_id = Uuid::new_v4().to_string().to_lowercase();
         let caption = text.to_string().trim().to_string();
-        
-        let bytes = std::fs::read(&path).unwrap_or_default();
-        if bytes.is_empty() {
-            eprintln!("Failed to read media file: {}", path);
-            return;
-        }
 
+        // Reject files over 100 MB (RCS limit) — metadata is instant, no file read
+        const MAX_BYTES: u64 = 100 * 1024 * 1024;
+        match std::fs::metadata(&path) {
+            Ok(meta) if meta.len() > MAX_BYTES => {
+                eprintln!(
+                    "send_media: file too large ({:.1} MB), RCS limit is 100 MB",
+                    meta.len() as f64 / 1_048_576.0
+                );
+                return;
+            }
+            Err(e) => {
+                eprintln!("send_media: cannot stat file: {e}");
+                return;
+            }
+            _ => {}
+        }
+        
+        // Lightweight: determine MIME and file name from extension only (no I/O)
         let path_obj = std::path::Path::new(&path);
         let file_name = path_obj.file_name().unwrap_or_default().to_string_lossy().to_string();
         let ext = path_obj.extension().unwrap_or_default().to_string_lossy().to_lowercase();
@@ -649,13 +670,8 @@ impl crate::ffi::MessageList {
             _ => "application/octet-stream",
         }.to_string();
 
-        let preview_uri = crate::app_state::utils::media_data_to_uri(&bytes, &mime_type, &tmp_id);
-
-        let thumb_uri = if mime_type.starts_with("video/") {
-            crate::app_state::utils::generate_video_thumbnail(path_obj).unwrap_or_default()
-        } else {
-            String::new()
-        };
+        // Use the original file path as preview — no need to copy gigabytes on the UI thread
+        let preview_uri = format!("file://{}", path);
 
         let body_text = if caption.is_empty() { String::new() } else { caption.clone() };
 
@@ -675,7 +691,8 @@ impl crate::ffi::MessageList {
             is_info: false,
             participant_id: String::new(),
             mime_type: QString::from(mime_type.as_str()),
-            thumbnail_url: QString::from(thumb_uri.as_str()),
+            thumbnail_url: QString::from(""),
+            upload_progress: 0.0,
         });
         drop(rust);
         self.as_mut().end_insert_rows();
@@ -683,14 +700,84 @@ impl crate::ffi::MessageList {
         let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
         let tmp_id_for_fail = tmp_id.clone();
 
+        // Create a cancellation token for this upload
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.as_mut().rust_mut().upload_cancellations.insert(tmp_id.clone(), cancel_flag.clone());
+
         spawn(async move {
+            // Generate video thumbnail in the background (quick: ffmpeg only extracts one frame)
+            if mime_type.starts_with("video/") {
+                let thumb_path = path.clone();
+                let thumb_tmp = tmp_id.clone();
+                let ui_for_thumb = qt_thread.clone();
+                let p = std::path::Path::new(&thumb_path);
+                if let Some(thumb_uri) = crate::app_state::utils::generate_video_thumbnail(p) {
+                    let _ = ui_for_thumb.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        let mut rust = qobject.as_mut().rust_mut();
+                        if let Some(pos) = rust.messages.iter().position(|m| m.message_id == thumb_tmp) {
+                            rust.messages[pos].thumbnail_url = QString::from(thumb_uri.as_str());
+                            drop(rust);
+                            let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
+                            qobject.as_mut().data_changed(&model_index, &model_index);
+                        }
+                    });
+                }
+            }
+
+            // Read the file in the background — this is the operation that was freezing the UI
+            let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
+                .await
+                .unwrap_or_else(|_| Err(std::io::Error::new(std::io::ErrorKind::Other, "task join failed")));
+            let bytes = match bytes {
+                Ok(b) if !b.is_empty() => b,
+                Ok(_) => {
+                    eprintln!("Failed to read media file (empty)");
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("Failed to read media file: {e}");
+                    return;
+                }
+            };
             let result: Result<(), String> = async {
                 let client = ensure_client().await?;
                 let handler = make_handler(&client).await?;
 
+                let ui_for_progress = qt_thread.clone();
+                let tmp_for_prog = tmp_id.clone();
+                let cancel_for_prog = cancel_flag.clone();
+                let uploaded_bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let uploaded_for_prog = uploaded_bytes.clone();
+                let on_progress = move |uploaded: usize, total: usize| {
+                    uploaded_for_prog.store(uploaded, Ordering::Relaxed);
+                    let prog = if total > 0 { uploaded as f32 / total as f32 } else { 0.0 };
+                    let tmp = tmp_for_prog.clone();
+                    let cancelled = cancel_for_prog.load(Ordering::Relaxed);
+                    let _ = ui_for_progress.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        let mut rust = qobject.as_mut().rust_mut();
+                        if let Some(pos) = rust.messages.iter().position(|m| m.message_id == tmp) {
+                            rust.messages[pos].upload_progress = prog;
+                            drop(rust);
+                            let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
+                            qobject.as_mut().data_changed(&model_index, &model_index);
+                        }
+                    });
+                    if cancelled {
+                        // The cancellation is handled in the stream by checking the flag
+                    }
+                };
+
+                let file_size = bytes.len();
                 // Upload the media first
-                let media = client.upload_media(&bytes, &mime_type, &file_name)
-                    .await.map_err(|e| e.to_string())?;
+                let media = client.upload_media_with_progress(&bytes, &mime_type, &file_name, Some(on_progress), Some(cancel_flag.clone()))
+                    .await.map_err(|e| {
+                        let uploaded = uploaded_bytes.load(Ordering::Relaxed);
+                        eprintln!("media upload failed after {:.2} MB of {:.2} MB ({:.1}%)",
+                            uploaded as f64 / 1_048_576.0,
+                            file_size as f64 / 1_048_576.0,
+                            if file_size > 0 { uploaded as f64 / file_size as f64 * 100.0 } else { 0.0 });
+                        e.to_string()
+                    })?;
 
                 // Build the send request with OUR tmp_id so the echo event matches
                 let mut message_info = vec![libgmessages_rs::proto::conversations::MessageInfo {
@@ -772,6 +859,29 @@ impl crate::ffi::MessageList {
                     let store = AuthDataStore::default_store();
                     let _ = store.delete();
                 }
+
+                // Check if this was a cancellation
+                let was_cancelled = cancel_flag.load(Ordering::Relaxed);
+                if was_cancelled {
+                    eprintln!("media upload was cancelled by user for {}", tmp_id_for_fail);
+                    // Clean up the cancellation token
+                    let tmp_cleanup = tmp_id_for_fail.clone();
+                    let _ = qt_thread.queue(
+                        move |mut qobject: Pin<&mut ffi::MessageList>| {
+                            qobject.as_mut().rust_mut().upload_cancellations.remove(&tmp_cleanup);
+                        },
+                    );
+                    return; // Don't mark as failed, the message was already removed
+                }
+
+                // Clean up the cancellation token
+                let tmp_cleanup = tmp_id_for_fail.clone();
+                let _ = qt_thread.queue(
+                    move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        qobject.as_mut().rust_mut().upload_cancellations.remove(&tmp_cleanup);
+                    },
+                );
+
                 let _ = qt_thread.queue(
                     move |mut qobject: Pin<&mut ffi::MessageList>| {
                         qobject.as_mut().begin_reset_model();
@@ -791,6 +901,14 @@ impl crate::ffi::MessageList {
                         }
                     },
                 );
+            } else {
+                // Success: clean up the cancellation token
+                let tmp_cleanup = tmp_id_for_fail;
+                let _ = qt_thread.queue(
+                    move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        qobject.as_mut().rust_mut().upload_cancellations.remove(&tmp_cleanup);
+                    },
+                );
             }
         });
     }
@@ -805,6 +923,18 @@ impl crate::ffi::MessageList {
         let p = std::path::Path::new(&path);
         let ret = crate::app_state::utils::generate_video_thumbnail(p).unwrap_or_default();
         QString::from(ret.as_str())
+    }
+
+    pub fn get_file_size(&self, file_url: &QString) -> i64 {
+        let file_path = file_url.to_string();
+        let path = if file_path.starts_with("file://") {
+            file_path[7..].to_string()
+        } else {
+            file_path
+        };
+        std::fs::metadata(&path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(-1)
     }
 
     pub fn send_typing(self: Pin<&mut Self>, typing: bool) {
@@ -907,6 +1037,7 @@ impl crate::ffi::MessageList {
             participant_id: participant_id.clone(),
             mime_type: QString::from(""),
             thumbnail_url: QString::from(""),
+            upload_progress: 1.0,
         };
 
         // Find insertion index (sorted by timestamp ascending)
@@ -1027,6 +1158,15 @@ impl crate::ffi::MessageList {
         }
 
         // Send the delete request to the server asynchronously
+        // If this is a temp message currently uploading, cancel the upload
+        {
+            let mut rust = self.as_mut().rust_mut();
+            if let Some(cancel) = rust.upload_cancellations.remove(&msg_id) {
+                cancel.store(true, Ordering::Relaxed);
+                eprintln!("delete_message: cancelling active upload for {}", msg_id);
+            }
+        }
+
         spawn(async move {
             if let Some(client) = get_client().await {
                 match client.delete_message(&msg_id).await {
