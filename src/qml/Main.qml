@@ -411,6 +411,7 @@ Kirigami.ApplicationWindow {
                         bottomMargin: Kirigami.Units.gridUnit
                         verticalLayoutDirection: ListView.BottomToTop
                         spacing: Kirigami.Units.mediumSpacing
+                        reuseItems: true
                         visible: !root.messageListModel.loading && root.selectedConversationIndex >= 0
 
                         // Smart scroll: only auto-scroll when user is already at the bottom

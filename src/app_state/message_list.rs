@@ -9,8 +9,8 @@ use cxx_qt_lib::QString;
 use libgmessages_rs::store::AuthDataStore;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::ffi::QHash_i32_QByteArray;
@@ -83,9 +83,7 @@ impl crate::ffi::MessageList {
             6 => QVariant::from(&QString::from(format_human_message_time(
                 item.timestamp_micros,
             ))),
-            7 => QVariant::from(&QString::from(format_section_date(
-                item.timestamp_micros,
-            ))),
+            7 => QVariant::from(&QString::from(format_section_date(item.timestamp_micros))),
             8 => QVariant::from(&item.media_url),
             9 => QVariant::from(&item.is_media),
             10 => QVariant::from(&item.avatar_url),
@@ -101,7 +99,7 @@ impl crate::ffi::MessageList {
                     true
                 };
                 QVariant::from(&is_start)
-            },
+            }
             14 => QVariant::from(&item.thumbnail_url),
             15 => QVariant::from(&item.upload_progress),
             _ => QVariant::default(),
@@ -152,7 +150,7 @@ impl crate::ffi::MessageList {
         rust.selected_conversation_id = conversation_id.clone();
         drop(rust);
         self.as_mut().end_reset_model();
-        
+
         if !is_cached {
             self.as_mut().set_loading(true);
         }
@@ -160,7 +158,16 @@ impl crate::ffi::MessageList {
         let qt_thread: CxxQtThread<ffi::MessageList> = self.qt_thread();
 
         spawn(async move {
-            let result: Result<(Vec<MessageItem>, String, Vec<(String, String, Vec<u8>, String)>, Vec<String>, Vec<(String, String)>), String> = async {
+            let result: Result<
+                (
+                    Vec<MessageItem>,
+                    String,
+                    Vec<(String, String, Vec<u8>, String)>,
+                    Vec<String>,
+                    Vec<(String, String)>,
+                ),
+                String,
+            > = async {
                 let client = ensure_client().await?;
                 let handler = make_handler(&client).await?;
 
@@ -170,36 +177,43 @@ impl crate::ffi::MessageList {
                     cursor: None,
                 };
                 let req_msgs = async {
-                    let res = handler.send_request::<libgmessages_rs::proto::client::ListMessagesResponse>(
-                        libgmessages_rs::proto::rpc::ActionType::ListMessages,
-                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                        &request,
-                    ).await;
+                    let res = handler
+                        .send_request::<libgmessages_rs::proto::client::ListMessagesResponse>(
+                            libgmessages_rs::proto::rpc::ActionType::ListMessages,
+                            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                            &request,
+                        )
+                        .await;
                     res
                 };
 
                 let convo_request = libgmessages_rs::proto::client::GetConversationRequest {
                     conversation_id: conversation_id.clone(),
                 };
-                
+
                 let req_convo = async {
-                    let res = handler.send_request::<libgmessages_rs::proto::client::GetConversationResponse>(
-                        libgmessages_rs::proto::rpc::ActionType::GetConversation,
-                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                        &convo_request,
-                    ).await;
+                    let res = handler
+                        .send_request::<libgmessages_rs::proto::client::GetConversationResponse>(
+                            libgmessages_rs::proto::rpc::ActionType::GetConversation,
+                            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                            &convo_request,
+                        )
+                        .await;
                     res
                 };
 
-                let (response, convo_response) = tokio::try_join!(req_msgs, req_convo)
-                    .map_err(|e| e.to_string())?;
+                let (response, convo_response) =
+                    tokio::try_join!(req_msgs, req_convo).map_err(|e| e.to_string())?;
 
                 let mut me_participant_id = String::new();
                 let mut avatar_identifiers: Vec<(String, String)> = Vec::new();
-                
+
                 if let Some(convo) = convo_response.conversation.as_ref() {
                     for p in &convo.participants {
-                        let pid = p.id.as_ref().map(|id| id.participant_id.clone()).unwrap_or_default();
+                        let pid =
+                            p.id.as_ref()
+                                .map(|id| id.participant_id.clone())
+                                .unwrap_or_default();
                         if p.is_me {
                             me_participant_id = pid;
                         } else {
@@ -214,7 +228,7 @@ impl crate::ffi::MessageList {
                         }
                     }
                 }
-                
+
                 let mut avatar_by_participant_id: HashMap<String, String> = HashMap::new();
                 let mut identifiers_to_fetch = Vec::new();
 
@@ -262,7 +276,8 @@ impl crate::ffi::MessageList {
 
                         let mut avatar_url = String::new();
                         if !from_me && !message.participant_id.is_empty() {
-                            if let Some(url) = avatar_by_participant_id.get(&message.participant_id) {
+                            if let Some(url) = avatar_by_participant_id.get(&message.participant_id)
+                            {
                                 avatar_url = url.clone();
                             }
                         }
@@ -300,88 +315,138 @@ impl crate::ffi::MessageList {
                     }
                 }
 
-                Ok((messages, me_participant_id, media_downloads, identifiers_to_fetch, avatar_identifiers))
+                Ok((
+                    messages,
+                    me_participant_id,
+                    media_downloads,
+                    identifiers_to_fetch,
+                    avatar_identifiers,
+                ))
             }
             .await;
 
             match result {
-                Ok((new_messages, me_participant_id, media_downloads, identifiers_to_fetch, avatar_identifiers)) => {
+                Ok((
+                    new_messages,
+                    me_participant_id,
+                    media_downloads,
+                    identifiers_to_fetch,
+                    avatar_identifiers,
+                )) => {
                     let convo_id = conversation_id.clone();
-                    let _ = qt_thread.queue(
-                        move |mut qobject: Pin<&mut ffi::MessageList>| {
-                            let mut rust = qobject.as_mut().rust_mut();
-                            if rust.selected_conversation_id == convo_id {
-                                if rust.messages.is_empty() {
-                                    rust.messages = new_messages.clone();
-                                    rust.me_participant_id = me_participant_id.clone();
-                                    rust.cache.insert(convo_id.clone(), (new_messages, me_participant_id));
-                                    drop(rust);
-                                    qobject.as_mut().begin_reset_model();
-                                    qobject.as_mut().set_loading(false);
-                                    qobject.as_mut().end_reset_model();
-                                } else {
-                                    // Set loading down immediately
-                                    drop(rust);
-                                    qobject.as_mut().set_loading(false);
-
-                                    // 1. Remove messages entirely deleted from server
-                                    let mut to_remove = Vec::new();
-                                    let rust = qobject.as_mut().rust_mut();
-                                    for (i, msg) in rust.messages.iter().enumerate() {
-                                        if !new_messages.iter().any(|m| m.message_id == msg.message_id) {
-                                            if msg.status.to_string() != "sending" && msg.status.to_string() != "failed" {
-                                                to_remove.push(i);
-                                            }
-                                        }
-                                    }
-                                    drop(rust);
-                                    for i in to_remove.into_iter().rev() {
-                                        qobject.as_mut().begin_remove_rows(&QModelIndex::default(), i as i32, i as i32);
-                                        qobject.as_mut().rust_mut().messages.remove(i);
-                                        qobject.as_mut().end_remove_rows();
-                                    }
-
-                                    // 2. Diff updates and inserts
-                                    for new_msg in &new_messages {
-                                        let mut rust = qobject.as_mut().rust_mut();
-                                        if let Some(pos) = rust.messages.iter().position(|m| m.message_id == new_msg.message_id) {
-                                            // Update
-                                            let mut changed = false;
-                                            if rust.messages[pos].status.to_string() != new_msg.status.to_string() {
-                                                rust.messages[pos].status = QString::from(new_msg.status.to_string().as_str());
-                                                changed = true;
-                                            }
-                                            if rust.messages[pos].body.to_string() != new_msg.body.to_string() {
-                                                rust.messages[pos].body = QString::from(new_msg.body.to_string().as_str());
-                                                changed = true;
-                                            }
-                                            drop(rust);
-                                            if changed {
-                                                let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
-                                                qobject.as_mut().data_changed(&model_index, &model_index);
-                                            }
-                                        } else {
-                                            // Insert
-                                            let pos = rust.messages.partition_point(|item| item.timestamp_micros >= new_msg.timestamp_micros);
-                                            drop(rust);
-                                            qobject.as_mut().begin_insert_rows(&QModelIndex::default(), pos as i32, pos as i32);
-                                            let mut rust = qobject.as_mut().rust_mut();
-                                            rust.messages.insert(pos, new_msg.clone());
-                                            drop(rust);
-                                            qobject.as_mut().end_insert_rows();
-                                        }
-                                    }
-
-                                    let mut rust = qobject.as_mut().rust_mut();
-                                    rust.me_participant_id = me_participant_id.clone();
-                                    let msgs_clone = rust.messages.clone();
-                                    rust.cache.insert(convo_id.clone(), (msgs_clone, me_participant_id));
-                                }
+                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        let mut rust = qobject.as_mut().rust_mut();
+                        if rust.selected_conversation_id == convo_id {
+                            if rust.messages.is_empty() {
+                                rust.messages = new_messages.clone();
+                                rust.me_participant_id = me_participant_id.clone();
+                                rust.cache
+                                    .insert(convo_id.clone(), (new_messages, me_participant_id));
+                                drop(rust);
+                                qobject.as_mut().begin_reset_model();
+                                qobject.as_mut().set_loading(false);
+                                qobject.as_mut().end_reset_model();
                             } else {
-                                rust.cache.insert(convo_id.clone(), (new_messages, me_participant_id));
+                                // Set loading down immediately
+                                drop(rust);
+                                qobject.as_mut().set_loading(false);
+
+                                // 1. Remove messages entirely deleted from server
+                                let mut to_remove = Vec::new();
+                                let rust = qobject.as_mut().rust_mut();
+                                for (i, msg) in rust.messages.iter().enumerate() {
+                                    if !new_messages.iter().any(|m| m.message_id == msg.message_id)
+                                    {
+                                        if msg.status.to_string() != "sending"
+                                            && msg.status.to_string() != "failed"
+                                        {
+                                            to_remove.push(i);
+                                        }
+                                    }
+                                }
+                                drop(rust);
+                                for i in to_remove.into_iter().rev() {
+                                    qobject.as_mut().begin_remove_rows(
+                                        &QModelIndex::default(),
+                                        i as i32,
+                                        i as i32,
+                                    );
+                                    qobject.as_mut().rust_mut().messages.remove(i);
+                                    qobject.as_mut().end_remove_rows();
+                                }
+
+                                // 2. Diff updates and inserts
+                                for new_msg in &new_messages {
+                                    let mut rust = qobject.as_mut().rust_mut();
+                                    if let Some(pos) = rust
+                                        .messages
+                                        .iter()
+                                        .position(|m| m.message_id == new_msg.message_id)
+                                    {
+                                        // Update
+                                        let mut changed = false;
+                                        if rust.messages[pos].status.to_string()
+                                            != new_msg.status.to_string()
+                                        {
+                                            rust.messages[pos].status =
+                                                QString::from(new_msg.status.to_string().as_str());
+                                            changed = true;
+                                        }
+                                        if rust.messages[pos].body.to_string()
+                                            != new_msg.body.to_string()
+                                        {
+                                            rust.messages[pos].body =
+                                                QString::from(new_msg.body.to_string().as_str());
+                                            changed = true;
+                                        }
+                                        drop(rust);
+                                        if changed {
+                                            let model_index = qobject.as_ref().index(
+                                                pos as i32,
+                                                0,
+                                                &QModelIndex::default(),
+                                            );
+                                            qobject
+                                                .as_mut()
+                                                .data_changed(&model_index, &model_index);
+                                        }
+                                    } else {
+                                        // Insert
+                                        let pos = rust.messages.partition_point(|item| {
+                                            item.timestamp_micros >= new_msg.timestamp_micros
+                                        });
+                                        drop(rust);
+                                        qobject.as_mut().begin_insert_rows(
+                                            &QModelIndex::default(),
+                                            pos as i32,
+                                            pos as i32,
+                                        );
+                                        let mut rust = qobject.as_mut().rust_mut();
+                                        rust.messages.insert(pos, new_msg.clone());
+                                        drop(rust);
+                                        qobject.as_mut().end_insert_rows();
+                                    }
+                                }
+
+                                let mut rust = qobject.as_mut().rust_mut();
+                                rust.me_participant_id = me_participant_id.clone();
+                                let msgs_clone = rust.messages.clone();
+                                if rust.cache.len() >= 10 && !rust.cache.contains_key(&convo_id) {
+                                    let key_to_remove = rust.cache.keys().next().cloned().unwrap();
+                                    rust.cache.remove(&key_to_remove);
+                                }
+                                rust.cache
+                                    .insert(convo_id.clone(), (msgs_clone, me_participant_id));
                             }
-                        },
-                    );
+                        } else {
+                            if rust.cache.len() >= 10 && !rust.cache.contains_key(&convo_id) {
+                                let key_to_remove = rust.cache.keys().next().cloned().unwrap();
+                                rust.cache.remove(&key_to_remove);
+                            }
+                            rust.cache
+                                .insert(convo_id.clone(), (new_messages, me_participant_id));
+                        }
+                    });
 
                     // Start background download of media
                     if !media_downloads.is_empty() {
@@ -390,38 +455,65 @@ impl crate::ffi::MessageList {
                             if let Some(client) = get_client().await {
                                 for (msg_id, media_id, key, mime) in media_downloads {
                                     let ext = crate::app_state::utils::mime_to_extension(&mime);
-                                    let safe_id = media_id.replace("/", "_").replace("+", "_").replace("=", "").replace("-", "_");
-                                    let safe_id = if safe_id.is_empty() { msg_id.replace("-", "_") } else { safe_id };
-                                    
+                                    let safe_id = media_id
+                                        .replace("/", "_")
+                                        .replace("+", "_")
+                                        .replace("=", "")
+                                        .replace("-", "_");
+                                    let safe_id = if safe_id.is_empty() {
+                                        msg_id.replace("-", "_")
+                                    } else {
+                                        safe_id
+                                    };
+
                                     let tmp_dir = std::env::temp_dir().join("kourier_media");
                                     let _ = std::fs::create_dir_all(&tmp_dir);
                                     let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
-                                    
+
                                     if !path.exists() {
-                                        if let Ok(data) = client.download_media(&media_id, &key).await {
-                                            let _ = crate::app_state::utils::media_data_to_uri(&data, &mime, &safe_id);
+                                        if let Ok(data) =
+                                            client.download_media(&media_id, &key).await
+                                        {
+                                            let _ = crate::app_state::utils::media_data_to_uri(
+                                                &data, &mime, &safe_id,
+                                            );
                                         }
                                     }
-                                    
+
                                     if path.exists() {
                                         let uri = format!("file://{}", path.to_string_lossy());
                                         let thumb_uri = if mime.starts_with("video/") {
-                                            crate::app_state::utils::generate_video_thumbnail(&path).unwrap_or_default()
+                                            crate::app_state::utils::generate_video_thumbnail(&path)
+                                                .unwrap_or_default()
                                         } else {
                                             String::new()
                                         };
-                                        let _ = ui_for_media.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
-                                            let mut rust = qobject.as_mut().rust_mut();
-                                            if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
-                                                rust.messages[pos].media_url = QString::from(uri.as_str());
-                                                if !thumb_uri.is_empty() {
-                                                    rust.messages[pos].thumbnail_url = QString::from(thumb_uri.as_str());
+                                        let _ = ui_for_media.queue(
+                                            move |mut qobject: Pin<&mut ffi::MessageList>| {
+                                                let mut rust = qobject.as_mut().rust_mut();
+                                                if let Some(pos) = rust
+                                                    .messages
+                                                    .iter()
+                                                    .position(|m| m.message_id == msg_id)
+                                                {
+                                                    rust.messages[pos].media_url =
+                                                        QString::from(uri.as_str());
+                                                    if !thumb_uri.is_empty() {
+                                                        rust.messages[pos].thumbnail_url =
+                                                            QString::from(thumb_uri.as_str());
+                                                    }
+                                                    drop(rust);
+                                                    let model_index = qobject.as_ref().index(
+                                                        pos as i32,
+                                                        0,
+                                                        &QModelIndex::default(),
+                                                    );
+                                                    qobject
+                                                        .as_mut()
+                                                        .data_changed(&model_index, &model_index);
                                                 }
-                                                drop(rust);
-                                                let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
-                                                qobject.as_mut().data_changed(&model_index, &model_index);
-                                            }
-                                        });
+                                            },
+                                        );
                                     }
                                 }
                             }
@@ -435,55 +527,70 @@ impl crate::ffi::MessageList {
                         let conversation_id_clone = conversation_id.clone();
                         spawn(async move {
                             if let Some(client_for_avatars) = get_client().await {
-                            let new_avatars = fetch_avatars_async(client_for_avatars, identifiers_to_fetch).await;
-                            if !new_avatars.is_empty() {
-                                let mut pid_to_url = HashMap::<String, String>::new();
-                                for (pid, id) in &mapped_identifiers {
-                                    if let Some(url) = new_avatars.get(id) {
-                                        pid_to_url.insert(pid.to_string(), url.to_string());
+                                let new_avatars =
+                                    fetch_avatars_async(client_for_avatars, identifiers_to_fetch)
+                                        .await;
+                                if !new_avatars.is_empty() {
+                                    let mut pid_to_url = HashMap::<String, String>::new();
+                                    for (pid, id) in &mapped_identifiers {
+                                        if let Some(url) = new_avatars.get(id) {
+                                            pid_to_url.insert(pid.to_string(), url.to_string());
+                                        }
                                     }
-                                }
-                                let _ = ui_for_avatars.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
-                                    let mut rust = qobject.as_mut().rust_mut();
-                                    if rust.selected_conversation_id == conversation_id_clone {
-                                        let mut changes = Vec::new();
-                                        for (pos, item) in rust.messages.iter_mut().enumerate() {
-                                            if !item.participant_id.is_empty() {
-                                                if let Some(url) = pid_to_url.get(&item.participant_id) {
-                                                    item.avatar_url = QString::from(url.as_str());
-                                                    changes.push(pos as i32);
+                                    let _ = ui_for_avatars.queue(
+                                        move |mut qobject: Pin<&mut ffi::MessageList>| {
+                                            let mut rust = qobject.as_mut().rust_mut();
+                                            if rust.selected_conversation_id
+                                                == conversation_id_clone
+                                            {
+                                                let mut changes = Vec::new();
+                                                for (pos, item) in
+                                                    rust.messages.iter_mut().enumerate()
+                                                {
+                                                    if !item.participant_id.is_empty() {
+                                                        if let Some(url) =
+                                                            pid_to_url.get(&item.participant_id)
+                                                        {
+                                                            item.avatar_url =
+                                                                QString::from(url.as_str());
+                                                            changes.push(pos as i32);
+                                                        }
+                                                    }
+                                                }
+                                                let msgs = rust.messages.clone();
+                                                let me_id = rust.me_participant_id.clone();
+                                                rust.cache
+                                                    .insert(conversation_id_clone, (msgs, me_id));
+                                                drop(rust);
+                                                for pos in changes {
+                                                    let model_index = qobject.as_ref().index(
+                                                        pos,
+                                                        0,
+                                                        &QModelIndex::default(),
+                                                    );
+                                                    qobject
+                                                        .as_mut()
+                                                        .data_changed(&model_index, &model_index);
                                                 }
                                             }
-                                        }
-                                        let msgs = rust.messages.clone();
-                                        let me_id = rust.me_participant_id.clone();
-                                        rust.cache.insert(conversation_id_clone, (msgs, me_id));
-                                        drop(rust);
-                                        for pos in changes {
-                                            let model_index = qobject.as_ref().index(pos, 0, &QModelIndex::default());
-                                            qobject.as_mut().data_changed(&model_index, &model_index);
-                                        }
-                                    }
-                                });
-                            }
+                                        },
+                                    );
+                                }
                             }
                         });
                     }
                 }
                 Err(error) => {
                     let is_auth_error = error.contains("authentication credential")
-                        || error.contains("401") || error.contains("403");
+                        || error.contains("401")
+                        || error.contains("403");
                     eprintln!("message load failed: {error}");
-                    let _ = qt_thread.queue(
-                        move |mut qobject: Pin<&mut ffi::MessageList>| {
-                            qobject.as_mut().set_loading(false);
-                            if is_auth_error {
-                                qobject
-                                    .as_mut()
-                                    .auth_error(&QString::from(error.as_str()));
-                            }
-                        },
-                    );
+                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        qobject.as_mut().set_loading(false);
+                        if is_auth_error {
+                            qobject.as_mut().auth_error(&QString::from(error.as_str()));
+                        }
+                    });
                 }
             }
         });
@@ -505,24 +612,28 @@ impl crate::ffi::MessageList {
 
         // Optimistic insert
         let insert_pos = 0;
-        self.as_mut().begin_insert_rows(&QModelIndex::default(), insert_pos, insert_pos);
+        self.as_mut()
+            .begin_insert_rows(&QModelIndex::default(), insert_pos, insert_pos);
         let mut rust = self.as_mut().rust_mut();
-        rust.messages.insert(0, MessageItem {
-            body: QString::from(body.clone()),
-            from_me: true,
-            transport_type: 4,
-            timestamp_micros: now_micros,
-            message_id: tmp_id.clone(),
-            status: QString::from("sending"),
-            media_url: QString::from(""),
-            is_media: false,
-            avatar_url: QString::from(""),
-            is_info: false,
-            participant_id: String::new(),
-            mime_type: QString::from(""),
-            thumbnail_url: QString::from(""),
-            upload_progress: 1.0,
-        });
+        rust.messages.insert(
+            0,
+            MessageItem {
+                body: QString::from(body.clone()),
+                from_me: true,
+                transport_type: 4,
+                timestamp_micros: now_micros,
+                message_id: tmp_id.clone(),
+                status: QString::from("sending"),
+                media_url: QString::from(""),
+                is_media: false,
+                avatar_url: QString::from(""),
+                is_info: false,
+                participant_id: String::new(),
+                mime_type: QString::from(""),
+                thumbnail_url: QString::from(""),
+                upload_progress: 1.0,
+            },
+        );
         // We do not sort here because the new message naturally belongs at the beginning (index 0).
         // It prevents scroll position reset issues.
         drop(rust);
@@ -586,8 +697,9 @@ impl crate::ffi::MessageList {
 
             if let Err(error) = result {
                 eprintln!("message send failed: {error}");
-                let is_auth_error =
-                    error.contains("authentication credential") || error.contains("401") || error.contains("403");
+                let is_auth_error = error.contains("authentication credential")
+                    || error.contains("401")
+                    || error.contains("403");
                 if is_auth_error {
                     clear_client().await;
                     let store = AuthDataStore::default_store();
@@ -595,25 +707,21 @@ impl crate::ffi::MessageList {
                         eprintln!("auth delete failed: {e}");
                     }
                 }
-                let _ = qt_thread.queue(
-                    move |mut qobject: Pin<&mut ffi::MessageList>| {
-                        qobject.as_mut().begin_reset_model();
-                        let mut rust = qobject.as_mut().rust_mut();
-                        if let Some(item) = rust
-                            .messages
-                            .iter_mut()
-                            .find(|item| item.message_id == tmp_id_for_fail)
-                        {
-                            item.status = QString::from("failed");
-                        }
-                        qobject.as_mut().end_reset_model();
-                        if is_auth_error {
-                            qobject
-                                .as_mut()
-                                .auth_error(&QString::from(error.as_str()));
-                        }
-                    },
-                );
+                let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                    qobject.as_mut().begin_reset_model();
+                    let mut rust = qobject.as_mut().rust_mut();
+                    if let Some(item) = rust
+                        .messages
+                        .iter_mut()
+                        .find(|item| item.message_id == tmp_id_for_fail)
+                    {
+                        item.status = QString::from("failed");
+                    }
+                    qobject.as_mut().end_reset_model();
+                    if is_auth_error {
+                        qobject.as_mut().auth_error(&QString::from(error.as_str()));
+                    }
+                });
             }
         });
     }
@@ -655,11 +763,19 @@ impl crate::ffi::MessageList {
             }
             _ => {}
         }
-        
+
         // Lightweight: determine MIME and file name from extension only (no I/O)
         let path_obj = std::path::Path::new(&path);
-        let file_name = path_obj.file_name().unwrap_or_default().to_string_lossy().to_string();
-        let ext = path_obj.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+        let file_name = path_obj
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let ext = path_obj
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
         let mime_type = match ext.as_str() {
             "png" => "image/png",
             "jpg" | "jpeg" => "image/jpeg",
@@ -668,32 +784,41 @@ impl crate::ffi::MessageList {
             "webm" => "video/webm",
             "webp" => "image/webp",
             _ => "application/octet-stream",
-        }.to_string();
+        }
+        .to_string();
 
         // Use the original file path as preview — no need to copy gigabytes on the UI thread
         let preview_uri = format!("file://{}", path);
 
-        let body_text = if caption.is_empty() { String::new() } else { caption.clone() };
+        let body_text = if caption.is_empty() {
+            String::new()
+        } else {
+            caption.clone()
+        };
 
         let insert_pos = 0;
-        self.as_mut().begin_insert_rows(&QModelIndex::default(), insert_pos, insert_pos);
+        self.as_mut()
+            .begin_insert_rows(&QModelIndex::default(), insert_pos, insert_pos);
         let mut rust = self.as_mut().rust_mut();
-        rust.messages.insert(0, MessageItem {
-            body: QString::from(body_text.as_str()), 
-            from_me: true,
-            transport_type: 4,
-            timestamp_micros: now_micros,
-            message_id: tmp_id.clone(),
-            status: QString::from("sending"),
-            media_url: QString::from(preview_uri.as_str()),
-            is_media: true,
-            avatar_url: QString::from(""),
-            is_info: false,
-            participant_id: String::new(),
-            mime_type: QString::from(mime_type.as_str()),
-            thumbnail_url: QString::from(""),
-            upload_progress: 0.0,
-        });
+        rust.messages.insert(
+            0,
+            MessageItem {
+                body: QString::from(body_text.as_str()),
+                from_me: true,
+                transport_type: 4,
+                timestamp_micros: now_micros,
+                message_id: tmp_id.clone(),
+                status: QString::from("sending"),
+                media_url: QString::from(preview_uri.as_str()),
+                is_media: true,
+                avatar_url: QString::from(""),
+                is_info: false,
+                participant_id: String::new(),
+                mime_type: QString::from(mime_type.as_str()),
+                thumbnail_url: QString::from(""),
+                upload_progress: 0.0,
+            },
+        );
         drop(rust);
         self.as_mut().end_insert_rows();
 
@@ -702,7 +827,10 @@ impl crate::ffi::MessageList {
 
         // Create a cancellation token for this upload
         let cancel_flag = Arc::new(AtomicBool::new(false));
-        self.as_mut().rust_mut().upload_cancellations.insert(tmp_id.clone(), cancel_flag.clone());
+        self.as_mut()
+            .rust_mut()
+            .upload_cancellations
+            .insert(tmp_id.clone(), cancel_flag.clone());
 
         spawn(async move {
             // Generate video thumbnail in the background (quick: ffmpeg only extracts one frame)
@@ -714,10 +842,15 @@ impl crate::ffi::MessageList {
                 if let Some(thumb_uri) = crate::app_state::utils::generate_video_thumbnail(p) {
                     let _ = ui_for_thumb.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                         let mut rust = qobject.as_mut().rust_mut();
-                        if let Some(pos) = rust.messages.iter().position(|m| m.message_id == thumb_tmp) {
+                        if let Some(pos) =
+                            rust.messages.iter().position(|m| m.message_id == thumb_tmp)
+                        {
                             rust.messages[pos].thumbnail_url = QString::from(thumb_uri.as_str());
                             drop(rust);
-                            let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
+                            let model_index =
+                                qobject
+                                    .as_ref()
+                                    .index(pos as i32, 0, &QModelIndex::default());
                             qobject.as_mut().data_changed(&model_index, &model_index);
                         }
                     });
@@ -727,7 +860,12 @@ impl crate::ffi::MessageList {
             // Read the file in the background — this is the operation that was freezing the UI
             let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
                 .await
-                .unwrap_or_else(|_| Err(std::io::Error::new(std::io::ErrorKind::Other, "task join failed")));
+                .unwrap_or_else(|_| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "task join failed",
+                    ))
+                });
             let bytes = match bytes {
                 Ok(b) if !b.is_empty() => b,
                 Ok(_) => {
@@ -852,8 +990,9 @@ impl crate::ffi::MessageList {
 
             if let Err(error) = result {
                 eprintln!("media send failed: {error}");
-                let is_auth_error =
-                    error.contains("authentication credential") || error.contains("401") || error.contains("403");
+                let is_auth_error = error.contains("authentication credential")
+                    || error.contains("401")
+                    || error.contains("403");
                 if is_auth_error {
                     clear_client().await;
                     let store = AuthDataStore::default_store();
@@ -866,49 +1005,51 @@ impl crate::ffi::MessageList {
                     eprintln!("media upload was cancelled by user for {}", tmp_id_for_fail);
                     // Clean up the cancellation token
                     let tmp_cleanup = tmp_id_for_fail.clone();
-                    let _ = qt_thread.queue(
-                        move |mut qobject: Pin<&mut ffi::MessageList>| {
-                            qobject.as_mut().rust_mut().upload_cancellations.remove(&tmp_cleanup);
-                        },
-                    );
+                    let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                        qobject
+                            .as_mut()
+                            .rust_mut()
+                            .upload_cancellations
+                            .remove(&tmp_cleanup);
+                    });
                     return; // Don't mark as failed, the message was already removed
                 }
 
                 // Clean up the cancellation token
                 let tmp_cleanup = tmp_id_for_fail.clone();
-                let _ = qt_thread.queue(
-                    move |mut qobject: Pin<&mut ffi::MessageList>| {
-                        qobject.as_mut().rust_mut().upload_cancellations.remove(&tmp_cleanup);
-                    },
-                );
+                let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                    qobject
+                        .as_mut()
+                        .rust_mut()
+                        .upload_cancellations
+                        .remove(&tmp_cleanup);
+                });
 
-                let _ = qt_thread.queue(
-                    move |mut qobject: Pin<&mut ffi::MessageList>| {
-                        qobject.as_mut().begin_reset_model();
-                        let mut rust = qobject.as_mut().rust_mut();
-                        if let Some(item) = rust
-                            .messages
-                            .iter_mut()
-                            .find(|item| item.message_id == tmp_id_for_fail)
-                        {
-                            item.status = QString::from("failed");
-                        }
-                        qobject.as_mut().end_reset_model();
-                        if is_auth_error {
-                            qobject
-                                .as_mut()
-                                .auth_error(&QString::from(error.as_str()));
-                        }
-                    },
-                );
+                let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                    qobject.as_mut().begin_reset_model();
+                    let mut rust = qobject.as_mut().rust_mut();
+                    if let Some(item) = rust
+                        .messages
+                        .iter_mut()
+                        .find(|item| item.message_id == tmp_id_for_fail)
+                    {
+                        item.status = QString::from("failed");
+                    }
+                    qobject.as_mut().end_reset_model();
+                    if is_auth_error {
+                        qobject.as_mut().auth_error(&QString::from(error.as_str()));
+                    }
+                });
             } else {
                 // Success: clean up the cancellation token
                 let tmp_cleanup = tmp_id_for_fail;
-                let _ = qt_thread.queue(
-                    move |mut qobject: Pin<&mut ffi::MessageList>| {
-                        qobject.as_mut().rust_mut().upload_cancellations.remove(&tmp_cleanup);
-                    },
-                );
+                let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+                    qobject
+                        .as_mut()
+                        .rust_mut()
+                        .upload_cancellations
+                        .remove(&tmp_cleanup);
+                });
             }
         });
     }
@@ -1011,7 +1152,9 @@ impl crate::ffi::MessageList {
                 }
                 drop(rust);
                 // Emit dataChanged for just this row
-                let model_index = self.as_ref().index(index as i32, 0, &QModelIndex::default());
+                let model_index = self
+                    .as_ref()
+                    .index(index as i32, 0, &QModelIndex::default());
                 self.as_mut().data_changed(&model_index, &model_index);
                 return;
             }
@@ -1081,16 +1224,26 @@ impl crate::ffi::MessageList {
         spawn(async move {
             if let Some(client) = get_client().await {
                 let key_bytes = STANDARD.decode(&key).unwrap_or_default();
-                let safe_id = med_id.replace("/", "_").replace("+", "_").replace("=", "").replace("-", "_");
-                let safe_id = if safe_id.is_empty() { msg_id.clone().replace("-", "_") } else { safe_id };
-                
+                let safe_id = med_id
+                    .replace("/", "_")
+                    .replace("+", "_")
+                    .replace("=", "")
+                    .replace("-", "_");
+                let safe_id = if safe_id.is_empty() {
+                    msg_id.clone().replace("-", "_")
+                } else {
+                    safe_id
+                };
+
                 let ext = crate::app_state::utils::mime_to_extension(&mime);
                 let tmp_dir = std::env::temp_dir().join("kourier_media");
                 let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
 
                 let uri = if !path.exists() {
                     if let Ok(data) = client.download_media(&med_id, &key_bytes).await {
-                        Some(crate::app_state::utils::media_data_to_uri(&data, &mime, &safe_id))
+                        Some(crate::app_state::utils::media_data_to_uri(
+                            &data, &mime, &safe_id,
+                        ))
                     } else {
                         None
                     }
@@ -1107,15 +1260,19 @@ impl crate::ffi::MessageList {
                 if let Some(uri) = uri {
                     let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                         let mut rust = qobject.as_mut().rust_mut();
-                        if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
+                        if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id)
+                        {
                             rust.messages[pos].media_url = QString::from(uri.as_str());
                             if let Some(t) = &thumb_uri {
                                 rust.messages[pos].thumbnail_url = QString::from(t.as_str());
                             }
                             drop(rust);
-                            let model_index = qobject.as_ref().index(pos as i32, 0, &QModelIndex::default());
+                            let model_index =
+                                qobject
+                                    .as_ref()
+                                    .index(pos as i32, 0, &QModelIndex::default());
                             qobject.as_mut().data_changed(&model_index, &model_index);
-                            
+
                             let mut rust = qobject.as_mut().rust_mut();
                             let selected = rust.selected_conversation_id.clone();
                             if !selected.is_empty() {
@@ -1199,7 +1356,10 @@ impl crate::ffi::MessageList {
         };
 
         let Some(data_bytes) = data_bytes else {
-            eprintln!("save_media: could not read media from: {}", &url[..url.len().min(80)]);
+            eprintln!(
+                "save_media: could not read media from: {}",
+                &url[..url.len().min(80)]
+            );
             return QString::from("");
         };
 
@@ -1237,4 +1397,3 @@ impl crate::ffi::MessageList {
         }
     }
 }
-
