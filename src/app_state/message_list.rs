@@ -799,13 +799,26 @@ impl crate::ffi::MessageList {
                     || (!tmp_id.is_empty() && item.message_id == tmp_id)
             });
             if let Some(index) = index {
+                // if status_code == 300 {
+                //     self.as_mut().begin_remove_rows(&QModelIndex::default(), index as i32, index as i32);
+                //     let mut rust = self.as_mut().rust_mut();
+                //     rust.messages.remove(index);
+                //     let convo_id = rust.selected_conversation_id.clone();
+                //     let msgs_clone = rust.messages.clone();
+                //     let me_id = rust.me_participant_id.clone();
+                //     rust.cache.insert(convo_id, (msgs_clone, me_id));
+                //     drop(rust);
+                //     self.as_mut().end_remove_rows();
+                //     return;
+                // }
+
                 let next_status = map_message_status(status_code, from_me);
                 let mut rust = self.as_mut().rust_mut();
                 if let Some(item) = rust.messages.get_mut(index) {
                     item.status = QString::from(next_status);
                     // Update the message_id if we had a tmp_id match
                     if !message_id.is_empty() && item.message_id != message_id {
-                        item.message_id = message_id;
+                        item.message_id = message_id.to_string();
                     }
                 }
                 drop(rust);

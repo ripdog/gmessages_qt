@@ -1,6 +1,8 @@
 use cxx_qt_build::{CxxQtBuilder, QmlModule};
 
 fn main() {
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=build.rs");
     CxxQtBuilder::new_qml_module(
         QmlModule::new("org.gmessages_qt").qml_files([
             "src/qml/Main.qml",

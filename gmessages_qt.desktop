@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Google Messages
+GenericName=Messaging Client
+Comment=Send and receive text messages
+Exec=gmessages_qt %u
+Icon=message-bubbles
+Type=Application
+Categories=Network;Chat;InstantMessaging;
+Terminal=false
+StartupNotify=true
+MimeType=x-scheme-handler/sms;x-scheme-handler/smsto;x-scheme-handler/mms;

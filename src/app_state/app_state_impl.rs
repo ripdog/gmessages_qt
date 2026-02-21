@@ -173,6 +173,7 @@ impl crate::ffi::AppState {
                         qobject
                             .as_mut()
                             .set_status_message(QString::from("Logged in"));
+                        qobject.as_mut().initialized(true);
                     });
                 }
                 Ok(None) => {
@@ -182,6 +183,7 @@ impl crate::ffi::AppState {
                         qobject
                             .as_mut()
                             .set_status_message(QString::from("Not logged in"));
+                        qobject.as_mut().initialized(false);
                     });
                 }
                 Err(error) => {
@@ -192,6 +194,7 @@ impl crate::ffi::AppState {
                         qobject
                             .as_mut()
                             .set_status_message(QString::from(&message));
+                        qobject.as_mut().initialized(false);
                     });
                 }
             }

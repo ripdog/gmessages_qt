@@ -5,9 +5,58 @@ import org.kde.kirigami as Kirigami
 import org.kde.kirigamiaddons.delegates as Delegates
 import QtQuick.Dialogs
 import org.gmessages_qt
+import Qt.labs.platform as Platform
 
 Kirigami.ApplicationWindow {
     id: root
+
+    property bool actuallyQuit: false
+    property var notifiedTimestamps: ({})
+    property bool startBackground: Qt.application.arguments.indexOf("--background") !== -1 || Qt.application.arguments.indexOf("--invisible") !== -1
+
+    visible: false
+    onClosing: function(close) {
+        if (!actuallyQuit) {
+            close.accepted = false
+            root.visible = false
+        }
+    }
+
+    Platform.SystemTrayIcon {
+        id: trayIcon
+        visible: true
+        icon.name: "message" 
+        tooltip: "gmessages"
+
+        menu: Platform.Menu {
+            Platform.MenuItem {
+                text: root.visible ? "Hide Window" : "Show Window"
+                onTriggered: {
+                    root.visible = !root.visible
+                    if (root.visible) {
+                        root.requestActivate()
+                    }
+                }
+            }
+            Platform.MenuSeparator {}
+            Platform.MenuItem {
+                text: "Quit"
+                onTriggered: {
+                    root.actuallyQuit = true
+                    Qt.quit()
+                }
+            }
+        }
+
+        onActivated: function(reason) {
+            if (reason === Platform.SystemTrayIcon.Trigger) {
+                root.visible = !root.visible
+                if (root.visible) {
+                    root.requestActivate()
+                }
+            }
+        }
+    }
 
     title: selectedConversationName.length > 0 ? selectedConversationName + " — gmessages" : "gmessages"
 
@@ -632,6 +681,14 @@ Kirigami.ApplicationWindow {
     Connections {
         target: appState
 
+        function onInitialized(loggedIn) {
+            if (!loggedIn) {
+                root.visible = true
+            } else if (!startBackground) {
+                root.visible = true
+            }
+        }
+
         function onLogged_inChanged() {
             if (appState.logged_in && loginDialog.visible) {
                 loginDialog.close()
@@ -669,6 +726,18 @@ Kirigami.ApplicationWindow {
 
         function onConversation_updated(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat) {
             conversationList.handle_conversation_event(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat)
+
+            if (unread && lastMessageTimestamp > Date.now() * 1000 - 60000000) {
+                const isViewing = (root.selectedConversationIndex >= 0 && root.conversationList.conversation_id(root.selectedConversationIndex) === conversationId)
+                
+                if (!(isViewing && root.active)) {
+                    const lastNotified = root.notifiedTimestamps[conversationId] || 0
+                    if (lastMessageTimestamp > lastNotified) {
+                        root.notifiedTimestamps[conversationId] = lastMessageTimestamp
+                        trayIcon.showMessage(name, preview, Platform.SystemTrayIcon.Information, 5000)
+                    }
+                }
+            }
         }
     }
 

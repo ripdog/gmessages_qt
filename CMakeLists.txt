@@ -21,3 +21,8 @@ install(
     PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/debug/gmessages_qt
     DESTINATION ${KDE_INSTALL_BINDIR}
 )
+
+install(
+    FILES gmessages_qt.desktop
+    DESTINATION ${KDE_INSTALL_APPDIR}
+)

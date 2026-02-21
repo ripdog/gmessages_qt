@@ -47,6 +47,9 @@ mod ffi {
         #[qinvokable]
         fn initialize(self: Pin<&mut AppState>);
 
+        #[qsignal]
+        fn initialized(self: Pin<&mut AppState>, logged_in: bool);
+
         #[qinvokable]
         fn logout(self: Pin<&mut AppState>, reason: &QString);
     }
