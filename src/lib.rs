@@ -52,6 +52,9 @@ mod ffi {
 
         #[qinvokable]
         fn logout(self: Pin<&mut AppState>, reason: &QString);
+
+        #[qinvokable]
+        fn clear_cache(self: Pin<&mut AppState>);
     }
 
     impl cxx_qt::Threading for AppState {}

@@ -115,6 +115,59 @@ Kirigami.ApplicationWindow {
         typingDebounce.stop();
     }
 
+    // ── Global Drawer ────────────────────────────────────────────
+    globalDrawer: Kirigami.GlobalDrawer {
+        id: globalDrawer
+        
+        // The drawer needs at least one action or it might refuse to open
+        actions: [
+            Kirigami.Action {
+                text: "gmessages"
+                enabled: false
+            }
+        ]
+
+        footer: ColumnLayout {
+            spacing: 0
+            
+            Kirigami.Separator {
+                Layout.fillWidth: true
+            }
+
+            Controls.ItemDelegate {
+                Layout.fillWidth: true
+                text: "Refresh"
+                icon.name: "view-refresh"
+                onClicked: {
+                    globalDrawer.close()
+                    root.conversationList.load()
+                }
+            }
+            Controls.ItemDelegate {
+                Layout.fillWidth: true
+                text: "Clear Cache"
+                icon.name: "edit-clear"
+                onClicked: {
+                    globalDrawer.close()
+                    root.appState.clear_cache()
+                    root.showPassiveNotification("Cache cleared", "short")
+                }
+            }
+            Controls.ItemDelegate {
+                Layout.fillWidth: true
+                text: "Log out"
+                icon.name: "system-log-out"
+                onClicked: {
+                    globalDrawer.close()
+                    root.selectedConversationIndex = -1
+                    root.selectedConversationName = ""
+                    root.sessionController.stop()
+                    root.appState.logout("")
+                }
+            }
+        }
+    }
+
     // ── pageStack configuration ──────────────────────────────────
     pageStack {
         initialPage: appState.logged_in ? conversationListComponent : welcomeComponent
@@ -172,25 +225,6 @@ Kirigami.ApplicationWindow {
             Kirigami.ColumnView.maximumWidth: Kirigami.Units.gridUnit * 26
             Kirigami.ColumnView.preferredWidth: Kirigami.Units.gridUnit * 22
             Kirigami.ColumnView.interactiveResizeEnabled: true
-
-            // Page actions (refresh + logout)
-            actions: [
-                Kirigami.Action {
-                    icon.name: "view-refresh"
-                    text: "Refresh"
-                    onTriggered: root.conversationList.load()
-                },
-                Kirigami.Action {
-                    icon.name: "system-log-out"
-                    text: "Log out"
-                    onTriggered: {
-                        root.selectedConversationIndex = -1
-                        root.selectedConversationName = ""
-                        root.sessionController.stop()
-                        root.appState.logout("")
-                    }
-                }
-            ]
 
             // Search bar in the header
             header: Controls.ToolBar {

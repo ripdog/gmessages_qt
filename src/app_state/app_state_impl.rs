@@ -226,5 +226,12 @@ impl crate::ffi::AppState {
             });
         });
     }
+
+    pub fn clear_cache(self: Pin<&mut Self>) {
+        spawn(async move {
+            let _ = std::fs::remove_dir_all(std::env::temp_dir().join("gmessages_media"));
+            shared().avatars.write().await.clear();
+        });
+    }
 }
 
