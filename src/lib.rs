@@ -209,6 +209,9 @@ mod ffi {
         fn save_media(self: Pin<&mut MessageList>, source_url: &QString, mime_type: &QString) -> QString;
 
         #[qinvokable]
+        fn delete_message(self: Pin<&mut MessageList>, message_id: &QString);
+
+        #[qinvokable]
         fn handle_message_event(
             self: Pin<&mut MessageList>,
             conversation_id: &QString,

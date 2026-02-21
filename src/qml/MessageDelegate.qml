@@ -18,6 +18,7 @@ Item {
     required property bool is_info
     required property int transport_type
     required property string mime_type
+    required property string message_id
 
     width: ListView.view ? ListView.view.width : 0
     height: messageCol.implicitHeight
@@ -226,6 +227,24 @@ Item {
                 TapHandler {
                     acceptedButtons: Qt.LeftButton
                     onTapped: root.statusVisibleIndex = messageDelegate.index
+                }
+
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: messageContextMenu.popup()
+                }
+
+                Controls.Menu {
+                    id: messageContextMenu
+
+                    Controls.MenuItem {
+                        text: "Delete message"
+                        icon.name: "edit-delete"
+                        enabled: messageDelegate.from_me && !messageDelegate.is_info
+                        onTriggered: {
+                            root.messageListModel.delete_message(messageDelegate.message_id)
+                        }
+                    }
                 }
             }
 

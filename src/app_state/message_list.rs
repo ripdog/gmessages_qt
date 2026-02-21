@@ -902,6 +902,47 @@ impl crate::ffi::MessageList {
         });
     }
 
+    pub fn delete_message(mut self: Pin<&mut Self>, message_id: &QString) {
+        let msg_id = message_id.to_string();
+
+        // Optimistic removal from the local list
+        let pos = self
+            .rust()
+            .messages
+            .iter()
+            .position(|m| m.message_id == msg_id);
+
+        if let Some(pos) = pos {
+            let pos_i32 = pos as i32;
+            self.as_mut()
+                .begin_remove_rows(&QModelIndex::default(), pos_i32, pos_i32);
+            self.as_mut().rust_mut().messages.remove(pos);
+            self.as_mut().end_remove_rows();
+
+            // Update cache
+            let selected = self.rust().selected_conversation_id.clone();
+            if !selected.is_empty() {
+                let mut rust = self.as_mut().rust_mut();
+                let msgs = rust.messages.clone();
+                let me_id = rust.me_participant_id.clone();
+                rust.cache.insert(selected, (msgs, me_id));
+            }
+        }
+
+        // Send the delete request to the server asynchronously
+        spawn(async move {
+            if let Some(client) = get_client().await {
+                match client.delete_message(&msg_id).await {
+                    Ok(_) => {
+                        eprintln!("delete_message: deleted {}", msg_id);
+                    }
+                    Err(e) => {
+                        eprintln!("delete_message: server error: {e}");
+                    }
+                }
+            }
+        });
+    }
     pub fn save_media(self: Pin<&mut Self>, source_url: &QString, mime_type: &QString) -> QString {
         let url = source_url.to_string();
         let mime = mime_type.to_string();
