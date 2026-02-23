@@ -8,7 +8,6 @@ use futures_util::StreamExt;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
-
 use super::*;
 // ── SessionController ────────────────────────────────────────────
 
@@ -57,6 +56,28 @@ impl crate::ffi::SessionController {
                         break;
                     }
 
+                    // Proactively refresh the tachyon auth token before
+                    // starting a new long-poll stream (mirrors what
+                    // mautrix-gmessages does to keep sessions alive).
+                    match client.refresh_token_if_needed().await {
+                        Ok(true) => {
+                            // Token was refreshed — persist the new auth
+                            // data to disk so the session survives restarts.
+                            let store = libgmessages_rs::store::AuthDataStore::default_store();
+                            let auth_handle = client.auth();
+                            let auth = auth_handle.lock().await;
+                            if let Err(e) = store.save(&auth) {
+                                eprintln!("failed to save refreshed auth: {e}");
+                            }
+                        }
+                        Ok(false) => { /* token still valid */ }
+                        Err(e) => {
+                            eprintln!("token refresh failed: {e}");
+                            // Continue anyway — the existing token may
+                            // still be valid for a while.
+                        }
+                    }
+
                     let stream = client
                         .start_long_poll_stream()
                         .await
@@ -73,13 +94,8 @@ impl crate::ffi::SessionController {
                         )
                         .await;
 
-                    let inner_result = run_long_poll_loop(
-                        stream,
-                        &handler,
-                        &stop_flag,
-                        &session_thread,
-                    )
-                    .await;
+                    let inner_result =
+                        run_long_poll_loop(stream, &handler, &stop_flag, &session_thread).await;
 
                     match inner_result {
                         Ok(StreamEndReason::Stopped) => break,
@@ -113,9 +129,7 @@ impl crate::ffi::SessionController {
             match result {
                 Ok(()) => {
                     let _ = qt_thread.queue(|mut qobject: Pin<&mut ffi::SessionController>| {
-                        qobject
-                            .as_mut()
-                            .set_status(QString::from("Session ended"));
+                        qobject.as_mut().set_status(QString::from("Session ended"));
                         qobject.as_mut().set_running(false);
                     });
                 }
@@ -236,9 +250,7 @@ pub async fn run_long_poll_loop(
         let Some(event) = updates.event else { continue };
 
         match event {
-            libgmessages_rs::proto::events::update_events::Event::MessageEvent(
-                message_event,
-            ) => {
+            libgmessages_rs::proto::events::update_events::Event::MessageEvent(message_event) => {
                 for message in message_event.data {
                     let body = extract_message_body(&message);
 
@@ -263,8 +275,8 @@ pub async fn run_long_poll_loop(
                         (String::new(), String::new(), String::new())
                     };
 
-                    let _ = qt_thread.queue(
-                        move |mut qobject: Pin<&mut ffi::SessionController>| {
+                    let _ =
+                        qt_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
                             qobject.as_mut().message_received(
                                 &QString::from(conversation_id.as_str()),
                                 &QString::from(participant_id.as_str()),
@@ -279,8 +291,7 @@ pub async fn run_long_poll_loop(
                                 &QString::from(decryption_key.as_str()),
                                 &QString::from(mime_type.as_str()),
                             );
-                        },
-                    );
+                        });
 
                     if !message.message_id.is_empty() {
                         let client = handler.client();
@@ -302,8 +313,8 @@ pub async fn run_long_poll_loop(
                     let preview = build_preview(&convo);
                     let is_group_chat = convo.is_group_chat;
 
-                    let _ = qt_thread.queue(
-                        move |mut qobject: Pin<&mut ffi::SessionController>| {
+                    let _ =
+                        qt_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
                             qobject.as_mut().conversation_updated(
                                 &QString::from(conversation_id.as_str()),
                                 &QString::from(name.as_str()),
@@ -312,8 +323,7 @@ pub async fn run_long_poll_loop(
                                 last_message_timestamp,
                                 is_group_chat,
                             );
-                        },
-                    );
+                        });
                 }
             }
             _ => {} // Ignore typing events, settings, etc. for now
@@ -330,11 +340,9 @@ pub fn extract_message_body(message: &libgmessages_rs::proto::conversations::Mes
         .message_info
         .iter()
         .find_map(|info| match &info.data {
-            Some(
-                libgmessages_rs::proto::conversations::message_info::Data::MessageContent(
-                    content,
-                ),
-            ) => {
+            Some(libgmessages_rs::proto::conversations::message_info::Data::MessageContent(
+                content,
+            )) => {
                 let text = content.content.trim();
                 if text.is_empty() {
                     None
@@ -388,4 +396,3 @@ pub fn extract_message_media(
             _ => None,
         })
 }
-

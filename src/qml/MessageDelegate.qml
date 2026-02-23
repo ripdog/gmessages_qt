@@ -21,6 +21,9 @@ Item {
     required property string message_id
     required property string thumbnail_url
     required property real upload_progress
+    required property string link_url
+    required property string link_title
+    required property string link_image_url
 
     required property bool is_start_of_day
 
@@ -32,6 +35,18 @@ Item {
     // 1=SMS, 2=Downloaded MMS, 3=Undownloaded MMS
     readonly property bool isSms: messageDelegate.transport_type === 1 || messageDelegate.transport_type === 2 || messageDelegate.transport_type === 3
     readonly property bool isVideo: messageDelegate.mime_type.startsWith("video/")
+    readonly property bool hasLinkPreview: messageDelegate.link_title.length > 0
+
+    // Convert plain-text body into HTML with clickable links
+    function linkifyBody(text) {
+        // Escape HTML entities first
+        let escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        // Replace URLs with anchor tags
+        escaped = escaped.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1">$1</a>');
+        // Convert newlines to <br>
+        escaped = escaped.replace(/\n/g, '<br>');
+        return escaped;
+    }
 
     ColumnLayout {
         id: messageCol
@@ -323,10 +338,12 @@ Item {
                         visible: messageDelegate.is_media && messageDelegate.media_url.length === 0
                     }
 
+                    // ── Message body text with clickable links ──
                     TextEdit {
                         id: bubbleText
                         Layout.fillWidth: true
-                        text: messageDelegate.body
+                        text: messageDelegate.linkifyBody(messageDelegate.body)
+                        textFormat: Text.RichText
                         color: messageDelegate.isFailed
                             ? Kirigami.Theme.negativeTextColor
                             : messageDelegate.from_me
@@ -343,6 +360,102 @@ Item {
                             : Kirigami.Theme.highlightColor
                         font.pointSize: Kirigami.Theme.defaultFont.pointSize
                         visible: messageDelegate.body.length > 0
+                        onLinkActivated: function(link) {
+                            Qt.openUrlExternally(link)
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            acceptedButtons: Qt.NoButton
+                            cursorShape: parent.hoveredLink.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor
+                        }
+                    }
+
+                    // ── Link preview card ──
+                    Rectangle {
+                        id: linkPreviewCard
+                        Layout.fillWidth: true
+                        Layout.topMargin: Kirigami.Units.smallSpacing
+                        visible: messageDelegate.hasLinkPreview
+                        implicitHeight: linkPreviewColumn.implicitHeight
+                        radius: Kirigami.Units.smallSpacing
+                        color: messageDelegate.from_me
+                            ? Qt.rgba(0, 0, 0, 0.15)
+                            : Qt.rgba(Kirigami.Theme.textColor.r,
+                                      Kirigami.Theme.textColor.g,
+                                      Kirigami.Theme.textColor.b, 0.06)
+                        border.width: messageDelegate.from_me ? 0 : 1
+                        border.color: Qt.rgba(Kirigami.Theme.textColor.r,
+                                              Kirigami.Theme.textColor.g,
+                                              Kirigami.Theme.textColor.b, 0.1)
+                        clip: true
+
+                        ColumnLayout {
+                            id: linkPreviewColumn
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            spacing: 0
+
+                            // Preview image
+                            Image {
+                                id: linkPreviewImage
+                                Layout.fillWidth: true
+                                Layout.maximumHeight: Kirigami.Units.gridUnit * 10
+                                Layout.minimumHeight: Kirigami.Units.gridUnit * 4
+                                fillMode: Image.PreserveAspectCrop
+                                source: messageDelegate.link_image_url
+                                visible: messageDelegate.link_image_url.length > 0 && status === Image.Ready
+                                asynchronous: true
+                                sourceSize.width: 600
+                            }
+
+                            // Title + domain row
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.margins: Kirigami.Units.smallSpacing * 1.5
+                                spacing: Kirigami.Units.smallSpacing * 0.5
+
+                                Controls.Label {
+                                    Layout.fillWidth: true
+                                    text: messageDelegate.link_title
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 3
+                                    elide: Text.ElideRight
+                                    font.pointSize: Kirigami.Theme.defaultFont.pointSize - 1
+                                    font.weight: Font.Medium
+                                    color: messageDelegate.from_me
+                                        ? Kirigami.Theme.highlightedTextColor
+                                        : Kirigami.Theme.textColor
+                                    visible: messageDelegate.link_title.length > 0
+                                }
+
+                                Controls.Label {
+                                    Layout.fillWidth: true
+                                    text: {
+                                        try {
+                                            const url = new URL(messageDelegate.link_url);
+                                            return url.hostname;
+                                        } catch (e) {
+                                            return messageDelegate.link_url;
+                                        }
+                                    }
+                                    elide: Text.ElideRight
+                                    font: Kirigami.Theme.smallFont
+                                    color: messageDelegate.from_me
+                                        ? Qt.rgba(Kirigami.Theme.highlightedTextColor.r,
+                                                  Kirigami.Theme.highlightedTextColor.g,
+                                                  Kirigami.Theme.highlightedTextColor.b, 0.7)
+                                        : Kirigami.Theme.disabledTextColor
+                                    visible: messageDelegate.link_url.length > 0
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: Qt.openUrlExternally(messageDelegate.link_url)
+                        }
                     }
                 }
 

@@ -6,7 +6,6 @@ use libgmessages_rs::{auth::AuthData, gmclient::GMClient, store::AuthDataStore};
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
-
 use super::*;
 // ── AppState ─────────────────────────────────────────────────────
 
@@ -66,14 +65,15 @@ impl crate::ffi::AppState {
                     let client = GMClient::new(auth);
                     let _ = client.fetch_config().await;
 
-                    let (qr_url, stream) = match client.start_qr_pairing_stream(remember_device).await {
-                        Ok(res) => res,
-                        Err(e) => {
-                            eprintln!("Failed to start QR pairing stream: {}", e);
-                            tokio::time::sleep(Duration::from_secs(2)).await;
-                            continue;
-                        }
-                    };
+                    let (qr_url, stream) =
+                        match client.start_qr_pairing_stream(remember_device).await {
+                            Ok(res) => res,
+                            Err(e) => {
+                                eprintln!("Failed to start QR pairing stream: {}", e);
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                continue;
+                            }
+                        };
 
                     let qr_url_string = qr_url.to_string();
                     let svg_data_url =
@@ -140,9 +140,7 @@ impl crate::ffi::AppState {
                     let message = format!("Login failed: {error}");
                     let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::AppState>| {
                         qobject.as_mut().set_login_in_progress(false);
-                        qobject
-                            .as_mut()
-                            .set_status_message(QString::from(&message));
+                        qobject.as_mut().set_status_message(QString::from(&message));
                     });
                 }
             }
@@ -159,6 +157,7 @@ impl crate::ffi::AppState {
         let qt_thread: CxxQtThread<ffi::AppState> = self.qt_thread();
 
         spawn(async move {
+            crate::app_state::utils::cleanup_old_cache_files();
             let store = AuthDataStore::default_store();
             let result = store.load();
 
@@ -191,9 +190,7 @@ impl crate::ffi::AppState {
                     let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::AppState>| {
                         qobject.as_mut().set_logged_in(false);
                         qobject.as_mut().set_login_in_progress(false);
-                        qobject
-                            .as_mut()
-                            .set_status_message(QString::from(&message));
+                        qobject.as_mut().set_status_message(QString::from(&message));
                         qobject.as_mut().initialized(false);
                     });
                 }
@@ -230,9 +227,9 @@ impl crate::ffi::AppState {
     pub fn clear_cache(self: Pin<&mut Self>) {
         spawn(async move {
             let _ = std::fs::remove_dir_all(std::env::temp_dir().join("kourier_media"));
+            let _ = std::fs::remove_dir_all(std::env::temp_dir().join("kourier_link_previews"));
             let _ = std::fs::remove_dir_all(std::env::temp_dir().join("kourier_avatars"));
             shared().avatars.write().await.clear();
         });
     }
 }
-

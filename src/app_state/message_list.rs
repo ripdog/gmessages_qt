@@ -37,6 +37,9 @@ pub struct MessageItem {
     pub mime_type: QString,
     pub thumbnail_url: QString,
     pub upload_progress: f32,
+    pub link_url: QString,
+    pub link_title: QString,
+    pub link_image_url: QString,
 }
 
 pub struct MessageListRust {
@@ -113,6 +116,9 @@ impl crate::ffi::MessageList {
             }
             14 => QVariant::from(&item.thumbnail_url),
             15 => QVariant::from(&item.upload_progress),
+            16 => QVariant::from(&item.link_url),
+            17 => QVariant::from(&item.link_title),
+            18 => QVariant::from(&item.link_image_url),
             _ => QVariant::default(),
         }
     }
@@ -135,6 +141,9 @@ impl crate::ffi::MessageList {
         roles.insert(13, "is_start_of_day".into());
         roles.insert(14, "thumbnail_url".into());
         roles.insert(15, "upload_progress".into());
+        roles.insert(16, "link_url".into());
+        roles.insert(17, "link_title".into());
+        roles.insert(18, "link_image_url".into());
         roles
     }
 
@@ -313,6 +322,9 @@ impl crate::ffi::MessageList {
                             mime_type: QString::from(media_mime.as_str()),
                             thumbnail_url: QString::from(""),
                             upload_progress: 1.0,
+                            link_url: QString::from(""),
+                            link_title: QString::from(""),
+                            link_image_url: QString::from(""),
                         })
                     })
                     .collect();
@@ -352,6 +364,18 @@ impl crate::ffi::MessageList {
                     new_cursor,
                 )) => {
                     let convo_id = conversation_id.clone();
+
+                    // Collect link targets BEFORE new_messages is moved into the closure
+                    let link_targets: Vec<(String, String)> = new_messages
+                        .iter()
+                        .filter(|m| !m.is_info && !m.is_media)
+                        .filter_map(|m| {
+                            let body = m.body.to_string();
+                            crate::app_state::utils::extract_first_url(&body)
+                                .map(|url| (m.message_id.clone(), url))
+                        })
+                        .collect();
+
                     let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
                         let mut rust = qobject.as_mut().rust_mut();
                         if rust.selected_conversation_id == convo_id {
@@ -608,6 +632,100 @@ impl crate::ffi::MessageList {
                             }
                         });
                     }
+
+                    // Start background link preview fetch
+                    {
+                        let ui_for_links = qt_thread.clone();
+                        let convo_id_for_links = conversation_id.clone();
+
+                        if !link_targets.is_empty() {
+                            spawn(async move {
+                                for (msg_id, url) in link_targets {
+                                    let og = crate::app_state::utils::fetch_og_metadata(&url).await;
+                                    let Some(og) = og else { continue };
+
+                                    // Download the OG image to disk cache if available
+                                    let image_file_url = if !og.image.is_empty() {
+                                        let cache_dir =
+                                            std::env::temp_dir().join("kourier_link_previews");
+                                        let _ = std::fs::create_dir_all(&cache_dir);
+                                        // Create a stable filename from the image URL hash
+                                        let hash = {
+                                            use std::collections::hash_map::DefaultHasher;
+                                            use std::hash::{Hash, Hasher};
+                                            let mut h = DefaultHasher::new();
+                                            og.image.hash(&mut h);
+                                            h.finish()
+                                        };
+                                        let ext = if og.image.contains(".png") {
+                                            "png"
+                                        } else if og.image.contains(".webp") {
+                                            "webp"
+                                        } else {
+                                            "jpg"
+                                        };
+                                        let path = cache_dir.join(format!("{:016x}.{}", hash, ext));
+
+                                        if path.exists() {
+                                            format!("file://{}", path.to_string_lossy())
+                                        } else {
+                                            // Download the image
+                                            match reqwest::get(&og.image).await {
+                                                Ok(resp) if resp.status().is_success() => {
+                                                    match resp.bytes().await {
+                                                        Ok(bytes) if !bytes.is_empty() => {
+                                                            let _ = std::fs::write(&path, &bytes);
+                                                            format!(
+                                                                "file://{}",
+                                                                path.to_string_lossy()
+                                                            )
+                                                        }
+                                                        _ => String::new(),
+                                                    }
+                                                }
+                                                _ => String::new(),
+                                            }
+                                        }
+                                    } else {
+                                        String::new()
+                                    };
+
+                                    let title = og.title;
+                                    let link = og.url;
+                                    let convo = convo_id_for_links.clone();
+                                    let _ = ui_for_links.queue(
+                                        move |mut qobject: Pin<&mut ffi::MessageList>| {
+                                            let mut rust = qobject.as_mut().rust_mut();
+                                            if rust.selected_conversation_id != convo {
+                                                return;
+                                            }
+                                            if let Some(pos) = rust
+                                                .messages
+                                                .iter()
+                                                .position(|m| m.message_id == msg_id)
+                                            {
+                                                rust.messages[pos].link_url =
+                                                    QString::from(link.as_str());
+                                                rust.messages[pos].link_title =
+                                                    QString::from(title.as_str());
+                                                rust.messages[pos].link_image_url =
+                                                    QString::from(image_file_url.as_str());
+                                                drop(rust);
+                                                let model_index = qobject.as_ref().index(
+                                                    pos as i32,
+                                                    0,
+                                                    &QModelIndex::default(),
+                                                );
+                                                qobject
+                                                    .as_mut()
+                                                    .data_changed(&model_index, &model_index);
+                                            }
+                                        },
+                                    );
+                                }
+                            });
+                        }
+                    }
                 }
                 Err(error) => {
                     let is_auth_error = error.contains("authentication credential")
@@ -714,6 +832,9 @@ impl crate::ffi::MessageList {
                             mime_type: cxx_qt_lib::QString::from(media_mime.as_str()),
                             thumbnail_url: cxx_qt_lib::QString::from(""),
                             upload_progress: 1.0,
+                            link_url: cxx_qt_lib::QString::from(""),
+                            link_title: cxx_qt_lib::QString::from(""),
+                            link_image_url: cxx_qt_lib::QString::from(""),
                         })
                     })
                     .collect();
@@ -912,6 +1033,9 @@ impl crate::ffi::MessageList {
                 mime_type: QString::from(""),
                 thumbnail_url: QString::from(""),
                 upload_progress: 1.0,
+                link_url: QString::from(""),
+                link_title: QString::from(""),
+                link_image_url: QString::from(""),
             },
         );
         // We do not sort here because the new message naturally belongs at the beginning (index 0).
@@ -1097,6 +1221,9 @@ impl crate::ffi::MessageList {
                 mime_type: QString::from(mime_type.as_str()),
                 thumbnail_url: QString::from(""),
                 upload_progress: 0.0,
+                link_url: QString::from(""),
+                link_title: QString::from(""),
+                link_image_url: QString::from(""),
             },
         );
         drop(rust);
@@ -1422,15 +1549,43 @@ impl crate::ffi::MessageList {
                 // }
 
                 let next_status = map_message_status(status_code, from_me);
+
+                // Trigger link preview before borrowing rust
+                let mut msg_id_for_preview = String::new();
+
+                let mut url_for_preview = String::new();
+                let mut needs_preview = false;
+
                 let mut rust = self.as_mut().rust_mut();
+                let convo = rust.selected_conversation_id.clone();
                 if let Some(item) = rust.messages.get_mut(index) {
                     item.status = QString::from(next_status);
                     // Update the message_id if we had a tmp_id match
                     if !message_id.is_empty() && item.message_id != message_id {
                         item.message_id = message_id.to_string();
                     }
+
+                    if !item.is_media
+                        && item.link_url.is_empty()
+                        && !item.body.to_string().is_empty()
+                    {
+                        if let Some(url) =
+                            crate::app_state::utils::extract_first_url(&item.body.to_string())
+                        {
+                            needs_preview = true;
+                            msg_id_for_preview = item.message_id.clone();
+
+                            url_for_preview = url;
+                        }
+                    }
                 }
                 drop(rust);
+
+                if needs_preview {
+                    let qt_thread = self.qt_thread();
+                    spawn_link_preview_fetch(qt_thread, url_for_preview, msg_id_for_preview, convo);
+                }
+
                 // Emit dataChanged for just this row
                 let model_index = self
                     .as_ref()
@@ -1446,6 +1601,8 @@ impl crate::ffi::MessageList {
 
         // New message: insert at the correct sorted position
         let status = map_message_status(status_code, from_me);
+        let body_str = body.clone();
+        let msg_id_str = message_id.clone();
         let new_item = MessageItem {
             body: QString::from(body),
             from_me,
@@ -1461,6 +1618,9 @@ impl crate::ffi::MessageList {
             mime_type: QString::from(""),
             thumbnail_url: QString::from(""),
             upload_progress: 1.0,
+            link_url: QString::from(""),
+            link_title: QString::from(""),
+            link_image_url: QString::from(""),
         };
 
         // Find insertion index (sorted by timestamp ascending)
@@ -1484,7 +1644,18 @@ impl crate::ffi::MessageList {
             let msgs = rust.messages.clone();
             let me_id = rust.me_participant_id.clone();
             let cache_cursor = rust.next_cursor.clone();
-            rust.cache.insert(selected, (msgs, me_id, cache_cursor));
+            rust.cache
+                .insert(selected.clone(), (msgs, me_id, cache_cursor));
+        }
+
+        // Kick off link preview fetch for the new message if it contains a URL
+        if !is_media && !body_str.is_empty() {
+            if let Some(url) = crate::app_state::utils::extract_first_url(&body_str) {
+                let qt_thread = self.qt_thread();
+                let msg_id = msg_id_str;
+                let convo = selected;
+                spawn_link_preview_fetch(qt_thread, url, msg_id, convo);
+            }
         }
     }
 
@@ -1679,4 +1850,72 @@ impl crate::ffi::MessageList {
             }
         }
     }
+}
+
+pub fn spawn_link_preview_fetch(
+    qt_thread: CxxQtThread<ffi::MessageList>,
+    url: String,
+    msg_id: String,
+    convo_id: String,
+) {
+    crate::app_state::shared::spawn(async move {
+        let og = crate::app_state::utils::fetch_og_metadata(&url).await;
+        let Some(og) = og else { return };
+
+        let image_file_url = if !og.image.is_empty() {
+            let cache_dir = std::env::temp_dir().join("kourier_link_previews");
+            let _ = std::fs::create_dir_all(&cache_dir);
+            let hash = {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut h = DefaultHasher::new();
+                og.image.hash(&mut h);
+                h.finish()
+            };
+            let ext = if og.image.contains(".png") {
+                "png"
+            } else if og.image.contains(".webp") {
+                "webp"
+            } else {
+                "jpg"
+            };
+            let path = cache_dir.join(format!("{:016x}.{}", hash, ext));
+
+            if path.exists() {
+                format!("file://{}", path.to_string_lossy())
+            } else {
+                match reqwest::get(&og.image).await {
+                    Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                        Ok(bytes) if !bytes.is_empty() => {
+                            let _ = std::fs::write(&path, &bytes);
+                            format!("file://{}", path.to_string_lossy())
+                        }
+                        _ => String::new(),
+                    },
+                    _ => String::new(),
+                }
+            }
+        } else {
+            String::new()
+        };
+
+        let title = og.title;
+        let link = og.url;
+        let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
+            let mut rust = qobject.as_mut().rust_mut();
+            if rust.selected_conversation_id != convo_id {
+                return;
+            }
+            if let Some(pos) = rust.messages.iter().position(|m| m.message_id == msg_id) {
+                rust.messages[pos].link_url = QString::from(link.as_str());
+                rust.messages[pos].link_title = QString::from(title.as_str());
+                rust.messages[pos].link_image_url = QString::from(image_file_url.as_str());
+                drop(rust);
+                let model_index = qobject
+                    .as_ref()
+                    .index(pos as i32, 0, &QModelIndex::default());
+                qobject.as_mut().data_changed(&model_index, &model_index);
+            }
+        });
+    });
 }

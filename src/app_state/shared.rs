@@ -1,7 +1,6 @@
+use base64::Engine;
 use libgmessages_rs::{gmclient::GMClient, store::AuthDataStore};
 use std::sync::OnceLock;
-use base64::Engine;
-
 
 // ── Shared session infrastructure ────────────────────────────────
 
@@ -75,12 +74,14 @@ pub async fn ensure_client() -> Result<GMClient, String> {
 }
 
 /// Create a SessionHandler from a client, set the session ID, and return it.
-pub async fn make_handler(client: &GMClient) -> Result<libgmessages_rs::gmclient::SessionHandler, String> {
+pub async fn make_handler(
+    client: &GMClient,
+) -> Result<libgmessages_rs::gmclient::SessionHandler, String> {
     let mut guard = shared().handler.write().await;
     if let Some(h) = guard.as_ref() {
         return Ok(h.clone());
     }
-    
+
     let mut handler = libgmessages_rs::gmclient::SessionHandler::new(client.clone());
     let auth_handle = client.auth();
     let auth_session = {
@@ -88,12 +89,10 @@ pub async fn make_handler(client: &GMClient) -> Result<libgmessages_rs::gmclient
         auth.session_id().to_string().to_lowercase()
     };
     handler.set_session_id(auth_session).await;
-    
+
     *guard = Some(handler.clone());
     Ok(handler)
 }
-
-
 
 /// Helper: fetch avatars asynchronously and cache them.
 pub async fn fetch_avatars_async(
@@ -123,37 +122,73 @@ pub async fn fetch_avatars_async(
             identifiers: to_fetch.clone(),
         };
         let attempts = [
-            (true, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
+            (
+                true,
+                libgmessages_rs::proto::rpc::MessageType::BugleAnnotation,
+            ),
             (true, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
-            (false, libgmessages_rs::proto::rpc::MessageType::BugleAnnotation),
-            (false, libgmessages_rs::proto::rpc::MessageType::BugleMessage),
-            (false, libgmessages_rs::proto::rpc::MessageType::UnknownMessageType),
+            (
+                false,
+                libgmessages_rs::proto::rpc::MessageType::BugleAnnotation,
+            ),
+            (
+                false,
+                libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+            ),
+            (
+                false,
+                libgmessages_rs::proto::rpc::MessageType::UnknownMessageType,
+            ),
         ];
 
         for (encrypted, message_type) in attempts {
-            let attempt: Result<libgmessages_rs::proto::client::GetThumbnailResponse, _> = if encrypted {
-                handler.send_request(libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail, message_type, &request).await
-            } else {
-                handler.send_request_dont_encrypt(libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail, message_type, &request, std::time::Duration::from_secs(5)).await
-            };
+            let attempt: Result<libgmessages_rs::proto::client::GetThumbnailResponse, _> =
+                if encrypted {
+                    handler
+                        .send_request(
+                            libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail,
+                            message_type,
+                            &request,
+                        )
+                        .await
+                } else {
+                    handler
+                        .send_request_dont_encrypt(
+                            libgmessages_rs::proto::rpc::ActionType::GetContactsThumbnail,
+                            message_type,
+                            &request,
+                            std::time::Duration::from_secs(5),
+                        )
+                        .await
+                };
             if let Ok(response) = attempt {
                 if !response.thumbnail.is_empty() {
                     let mut cache = shared().avatars.write().await;
                     for thumb in response.thumbnail {
                         if let Some(data) = thumb.data.as_ref() {
                             if !data.image_buffer.is_empty() {
-                                let ext = crate::app_state::utils::detect_extension(&data.image_buffer);
-                                
-                                let safe_id = thumb.identifier.replace("/", "_").replace("+", "_").replace("=", "").replace("-", "_");
-                                let safe_id = if safe_id.is_empty() { "unknown".to_string() } else { safe_id };
-                                
+                                let ext =
+                                    crate::app_state::utils::detect_extension(&data.image_buffer);
+
+                                let safe_id = thumb
+                                    .identifier
+                                    .replace("/", "_")
+                                    .replace("+", "_")
+                                    .replace("=", "")
+                                    .replace("-", "_");
+                                let safe_id = if safe_id.is_empty() {
+                                    "unknown".to_string()
+                                } else {
+                                    safe_id
+                                };
+
                                 let tmp_dir = std::env::temp_dir().join("kourier_avatars");
                                 let _ = std::fs::create_dir_all(&tmp_dir);
                                 let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
-                                
+
                                 let _ = std::fs::write(&path, &data.image_buffer);
                                 let url = format!("file://{}", path.to_string_lossy());
-                                
+
                                 cache.insert(thumb.identifier.clone(), url.clone());
                                 results.insert(thumb.identifier.clone(), url);
                             }
