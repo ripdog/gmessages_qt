@@ -130,6 +130,9 @@ mod ffi {
         fn load(self: Pin<&mut ConversationList>);
 
         #[qinvokable]
+        fn load_more(self: Pin<&mut ConversationList>);
+
+        #[qinvokable]
         fn apply_filter(self: Pin<&mut ConversationList>, filter: &QString);
 
         #[qinvokable]
@@ -172,6 +175,14 @@ mod ffi {
         fn endResetModel(self: Pin<&mut Self>);
 
         #[inherit]
+        #[rust_name = "begin_insert_rows"]
+        fn beginInsertRows(self: Pin<&mut Self>, parent: &QModelIndex, first: i32, last: i32);
+
+        #[inherit]
+        #[rust_name = "end_insert_rows"]
+        fn endInsertRows(self: Pin<&mut Self>);
+
+        #[inherit]
         #[rust_name = "data_changed"]
         fn dataChanged(self: Pin<&mut Self>, top_left: &QModelIndex, bottom_right: &QModelIndex);
 
@@ -203,6 +214,9 @@ mod ffi {
         fn load(self: Pin<&mut MessageList>, conversation_id: &QString);
 
         #[qinvokable]
+        fn load_more(self: Pin<&mut MessageList>);
+
+        #[qinvokable]
         fn send_message(self: Pin<&mut MessageList>, text: &QString);
 
         #[qinvokable]
@@ -218,7 +232,11 @@ mod ffi {
         fn send_typing(self: Pin<&mut MessageList>, typing: bool);
 
         #[qinvokable]
-        fn save_media(self: Pin<&mut MessageList>, source_url: &QString, mime_type: &QString) -> QString;
+        fn save_media(
+            self: Pin<&mut MessageList>,
+            source_url: &QString,
+            mime_type: &QString,
+        ) -> QString;
 
         #[qinvokable]
         fn delete_message(self: Pin<&mut MessageList>, message_id: &QString);

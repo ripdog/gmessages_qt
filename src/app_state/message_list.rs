@@ -44,7 +44,16 @@ pub struct MessageListRust {
     messages: Vec<MessageItem>,
     selected_conversation_id: String,
     me_participant_id: String,
-    cache: HashMap<String, (Vec<MessageItem>, String)>,
+    cache: HashMap<
+        String,
+        (
+            Vec<MessageItem>,
+            String,
+            Option<libgmessages_rs::proto::client::Cursor>,
+        ),
+    >,
+    next_cursor: Option<libgmessages_rs::proto::client::Cursor>,
+    pub loading_more: bool,
     upload_cancellations: HashMap<String, Arc<AtomicBool>>,
 }
 
@@ -56,6 +65,8 @@ impl Default for MessageListRust {
             selected_conversation_id: String::new(),
             me_participant_id: String::new(),
             cache: HashMap::new(),
+            next_cursor: None,
+            loading_more: false,
             upload_cancellations: HashMap::new(),
         }
     }
@@ -135,17 +146,21 @@ impl crate::ffi::MessageList {
 
         self.as_mut().begin_reset_model();
         let mut rust = self.as_mut().rust_mut();
-        let is_cached = if let Some((cached_msgs, me_id)) = rust.cache.get(&conversation_id) {
-            let c = cached_msgs.clone();
-            let m = me_id.clone();
-            rust.messages = c;
-            rust.me_participant_id = m;
-            true
-        } else {
-            rust.messages.clear();
-            rust.me_participant_id.clear();
-            false
-        };
+        let is_cached =
+            if let Some((cached_msgs, me_id, cached_cursor)) = rust.cache.get(&conversation_id) {
+                let c = cached_msgs.clone();
+                let m = me_id.clone();
+                let cur = cached_cursor.clone();
+                rust.messages = c;
+                rust.me_participant_id = m;
+                rust.next_cursor = cur;
+                true
+            } else {
+                rust.messages.clear();
+                rust.me_participant_id.clear();
+                rust.next_cursor = None;
+                false
+            };
         rust.messages.shrink_to_fit();
         rust.selected_conversation_id = conversation_id.clone();
         drop(rust);
@@ -165,6 +180,7 @@ impl crate::ffi::MessageList {
                     Vec<(String, String, Vec<u8>, String)>,
                     Vec<String>,
                     Vec<(String, String)>,
+                    Option<libgmessages_rs::proto::client::Cursor>,
                 ),
                 String,
             > = async {
@@ -321,6 +337,7 @@ impl crate::ffi::MessageList {
                     media_downloads,
                     identifiers_to_fetch,
                     avatar_identifiers,
+                    response.cursor,
                 ))
             }
             .await;
@@ -332,6 +349,7 @@ impl crate::ffi::MessageList {
                     media_downloads,
                     identifiers_to_fetch,
                     avatar_identifiers,
+                    new_cursor,
                 )) => {
                     let convo_id = conversation_id.clone();
                     let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::MessageList>| {
@@ -340,8 +358,11 @@ impl crate::ffi::MessageList {
                             if rust.messages.is_empty() {
                                 rust.messages = new_messages.clone();
                                 rust.me_participant_id = me_participant_id.clone();
-                                rust.cache
-                                    .insert(convo_id.clone(), (new_messages, me_participant_id));
+                                rust.next_cursor = new_cursor.clone();
+                                rust.cache.insert(
+                                    convo_id.clone(),
+                                    (new_messages, me_participant_id, new_cursor.clone()),
+                                );
                                 drop(rust);
                                 qobject.as_mut().begin_reset_model();
                                 qobject.as_mut().set_loading(false);
@@ -430,21 +451,26 @@ impl crate::ffi::MessageList {
 
                                 let mut rust = qobject.as_mut().rust_mut();
                                 rust.me_participant_id = me_participant_id.clone();
+                                rust.next_cursor = new_cursor.clone();
                                 let msgs_clone = rust.messages.clone();
                                 if rust.cache.len() >= 10 && !rust.cache.contains_key(&convo_id) {
                                     let key_to_remove = rust.cache.keys().next().cloned().unwrap();
                                     rust.cache.remove(&key_to_remove);
                                 }
-                                rust.cache
-                                    .insert(convo_id.clone(), (msgs_clone, me_participant_id));
+                                rust.cache.insert(
+                                    convo_id.clone(),
+                                    (msgs_clone, me_participant_id, new_cursor.clone()),
+                                );
                             }
                         } else {
                             if rust.cache.len() >= 10 && !rust.cache.contains_key(&convo_id) {
                                 let key_to_remove = rust.cache.keys().next().cloned().unwrap();
                                 rust.cache.remove(&key_to_remove);
                             }
-                            rust.cache
-                                .insert(convo_id.clone(), (new_messages, me_participant_id));
+                            rust.cache.insert(
+                                convo_id.clone(),
+                                (new_messages, me_participant_id, new_cursor.clone()),
+                            );
                         }
                     });
 
@@ -559,8 +585,11 @@ impl crate::ffi::MessageList {
                                                 }
                                                 let msgs = rust.messages.clone();
                                                 let me_id = rust.me_participant_id.clone();
-                                                rust.cache
-                                                    .insert(conversation_id_clone, (msgs, me_id));
+                                                let cache_cursor = rust.next_cursor.clone();
+                                                rust.cache.insert(
+                                                    conversation_id_clone,
+                                                    (msgs, me_id, cache_cursor),
+                                                );
                                                 drop(rust);
                                                 for pos in changes {
                                                     let model_index = qobject.as_ref().index(
@@ -591,6 +620,256 @@ impl crate::ffi::MessageList {
                             qobject.as_mut().auth_error(&QString::from(error.as_str()));
                         }
                     });
+                }
+            }
+        });
+    }
+
+    pub fn load_more(mut self: core::pin::Pin<&mut Self>) {
+        eprintln!("MessageList::load_more called");
+        if self.rust().loading || self.rust().loading_more {
+            eprintln!("MessageList::load_more: already loading, returning");
+            return;
+        }
+        let cursor = self.rust().next_cursor.clone();
+        if cursor.is_none() {
+            eprintln!("MessageList::load_more: no next_cursor, returning");
+            return;
+        }
+
+        let mut rust = self.as_mut().rust_mut();
+        rust.loading_more = true;
+        let conversation_id = rust.selected_conversation_id.clone();
+        let me_id = rust.me_participant_id.clone();
+        drop(rust);
+
+        let qt_thread: cxx_qt::CxxQtThread<ffi::MessageList> = self.qt_thread();
+
+        crate::app_state::shared::spawn(async move {
+            let result: Result<
+                (
+                    Vec<MessageItem>,
+                    Vec<(String, String, Vec<u8>, String)>,
+                    Option<libgmessages_rs::proto::client::Cursor>,
+                ),
+                String,
+            > = async {
+                let client = crate::app_state::shared::ensure_client().await?;
+                let handler = crate::app_state::shared::make_handler(&client).await?;
+
+                let request = libgmessages_rs::proto::client::ListMessagesRequest {
+                    conversation_id: conversation_id.clone(),
+                    count: 50,
+                    cursor: cursor.clone(),
+                };
+
+                let response = handler
+                    .send_request::<libgmessages_rs::proto::client::ListMessagesResponse>(
+                        libgmessages_rs::proto::rpc::ActionType::ListMessages,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &request,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let mut media_downloads = Vec::new();
+
+                let mut messages: Vec<MessageItem> = response
+                    .messages
+                    .into_iter()
+                    .filter_map(|message| {
+                        let body = extract_message_body(&message);
+                        let media = extract_message_media(&message);
+                        if body.is_empty() && media.is_none() {
+                            return None;
+                        }
+                        let from_me = !me_id.is_empty() && message.participant_id == me_id;
+                        let status_code = message
+                            .message_status
+                            .as_ref()
+                            .map(|s| s.status)
+                            .unwrap_or(0);
+                        let status = map_message_status(status_code, from_me);
+                        let message_id = extract_message_id(&message);
+
+                        let is_media = media.is_some();
+                        let media_mime = if let Some((id, key, ref mime)) = media {
+                            let m = mime.clone();
+                            media_downloads.push((message_id.clone(), id, key, mime.clone()));
+                            m
+                        } else {
+                            String::new()
+                        };
+
+                        Some(MessageItem {
+                            body: cxx_qt_lib::QString::from(body),
+                            from_me,
+                            transport_type: message.r#type,
+                            timestamp_micros: message.timestamp,
+                            message_id,
+                            status: cxx_qt_lib::QString::from(status),
+                            media_url: cxx_qt_lib::QString::from(""),
+                            is_media,
+                            avatar_url: cxx_qt_lib::QString::from(""),
+                            is_info: status_code >= 200,
+                            participant_id: message.participant_id.clone(),
+                            mime_type: cxx_qt_lib::QString::from(media_mime.as_str()),
+                            thumbnail_url: cxx_qt_lib::QString::from(""),
+                            upload_progress: 1.0,
+                        })
+                    })
+                    .collect();
+
+                messages.sort_by(|a, b| b.timestamp_micros.cmp(&a.timestamp_micros));
+
+                Ok((messages, media_downloads, response.cursor))
+            }
+            .await;
+
+            match result {
+                Ok((new_messages, media_downloads, new_cursor)) => {
+                    let convo_id = conversation_id.clone();
+                    let qt_thread_clone = qt_thread.clone();
+                    let _ = qt_thread.queue(
+                        move |mut qobject: core::pin::Pin<&mut ffi::MessageList>| {
+                            let mut rust = qobject.as_mut().rust_mut();
+                            rust.loading_more = false;
+                            if rust.selected_conversation_id == convo_id {
+                                // Map avatars from existing messages
+                                let mut pid_to_url = std::collections::HashMap::new();
+                                for m in &rust.messages {
+                                    if !m.participant_id.is_empty()
+                                        && !m.avatar_url.to_string().is_empty()
+                                    {
+                                        pid_to_url.insert(
+                                            m.participant_id.clone(),
+                                            m.avatar_url.to_string(),
+                                        );
+                                    }
+                                }
+
+                                let mut final_new = new_messages.clone();
+                                for m in &mut final_new {
+                                    if let Some(url) = pid_to_url.get(&m.participant_id) {
+                                        m.avatar_url = cxx_qt_lib::QString::from(url.as_str());
+                                    }
+                                }
+
+                                rust.next_cursor = new_cursor.clone();
+
+                                let insert_pos = rust.messages.len();
+                                let count = final_new.len();
+                                drop(rust);
+
+                                if count > 0 {
+                                    eprintln!("MessageList::load_more: inserting {} messages at pos {}", count, insert_pos);
+                                    qobject.as_mut().begin_insert_rows(
+                                        &crate::ffi::QModelIndex::default(),
+                                        insert_pos as i32,
+                                        (insert_pos + count - 1) as i32,
+                                    );
+                                    let mut rust = qobject.as_mut().rust_mut();
+                                    rust.messages.extend(final_new);
+                                    let msgs = rust.messages.clone();
+                                    let selected = rust.selected_conversation_id.clone();
+                                    let me_p = rust.me_participant_id.clone();
+                                    let cur = rust.next_cursor.clone();
+                                    rust.cache.insert(selected, (msgs, me_p, cur));
+                                    drop(rust);
+                                    qobject.as_mut().end_insert_rows();
+                                } else {
+                                    let mut rust = qobject.as_mut().rust_mut();
+                                    let msgs = rust.messages.clone();
+                                    let selected = rust.selected_conversation_id.clone();
+                                    let me_p = rust.me_participant_id.clone();
+                                    let cur = rust.next_cursor.clone();
+                                    rust.cache.insert(selected, (msgs, me_p, cur));
+                                }
+                            }
+                        },
+                    );
+
+                    if !media_downloads.is_empty() {
+                        let ui_for_media = qt_thread_clone.clone();
+                        crate::app_state::shared::spawn(async move {
+                            if let Some(client) = crate::app_state::shared::get_client().await {
+                                for (msg_id, media_id, key, mime) in media_downloads {
+                                    let ext = crate::app_state::utils::mime_to_extension(&mime);
+                                    let safe_id = media_id
+                                        .replace("/", "_")
+                                        .replace("+", "_")
+                                        .replace("=", "")
+                                        .replace("-", "_");
+                                    let safe_id = if safe_id.is_empty() {
+                                        msg_id.replace("-", "_")
+                                    } else {
+                                        safe_id
+                                    };
+
+                                    let tmp_dir = std::env::temp_dir().join("kourier_media");
+                                    let _ = std::fs::create_dir_all(&tmp_dir);
+                                    let path = tmp_dir.join(format!("{}.{}", safe_id, ext));
+
+                                    if !path.exists() {
+                                        if let Ok(data) =
+                                            client.download_media(&media_id, &key).await
+                                        {
+                                            let _ = crate::app_state::utils::media_data_to_uri(
+                                                &data, &mime, &safe_id,
+                                            );
+                                        }
+                                    }
+
+                                    if path.exists() {
+                                        let uri = format!("file://{}", path.to_string_lossy());
+                                        let thumb_uri = if mime.starts_with("video/") {
+                                            crate::app_state::utils::generate_video_thumbnail(&path)
+                                                .unwrap_or_default()
+                                        } else {
+                                            String::new()
+                                        };
+                                        let _ = ui_for_media.queue(
+                                            move |mut qobject: core::pin::Pin<
+                                                &mut ffi::MessageList,
+                                            >| {
+                                                let mut rust = qobject.as_mut().rust_mut();
+                                                if let Some(pos) = rust
+                                                    .messages
+                                                    .iter()
+                                                    .position(|m| m.message_id == msg_id)
+                                                {
+                                                    rust.messages[pos].media_url =
+                                                        cxx_qt_lib::QString::from(uri.as_str());
+                                                    if !thumb_uri.is_empty() {
+                                                        rust.messages[pos].thumbnail_url =
+                                                            cxx_qt_lib::QString::from(
+                                                                thumb_uri.as_str(),
+                                                            );
+                                                    }
+                                                    drop(rust);
+                                                    let model_index = qobject.as_ref().index(
+                                                        pos as i32,
+                                                        0,
+                                                        &crate::ffi::QModelIndex::default(),
+                                                    );
+                                                    qobject
+                                                        .as_mut()
+                                                        .data_changed(&model_index, &model_index);
+                                                }
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+                Err(error) => {
+                    let _ = qt_thread.queue(
+                        move |mut qobject: core::pin::Pin<&mut ffi::MessageList>| {
+                            qobject.as_mut().rust_mut().loading_more = false;
+                        },
+                    );
                 }
             }
         });
@@ -1203,7 +1482,8 @@ impl crate::ffi::MessageList {
             let mut rust = self.as_mut().rust_mut();
             let msgs = rust.messages.clone();
             let me_id = rust.me_participant_id.clone();
-            rust.cache.insert(selected, (msgs, me_id));
+            let cache_cursor = rust.next_cursor.clone();
+            rust.cache.insert(selected, (msgs, me_id, cache_cursor));
         }
     }
 
@@ -1278,7 +1558,8 @@ impl crate::ffi::MessageList {
                             if !selected.is_empty() {
                                 let msgs = rust.messages.clone();
                                 let me_id = rust.me_participant_id.clone();
-                                rust.cache.insert(selected, (msgs, me_id));
+                                let cache_cursor = rust.next_cursor.clone();
+                                rust.cache.insert(selected, (msgs, me_id, cache_cursor));
                             }
                         }
                     });
@@ -1310,7 +1591,8 @@ impl crate::ffi::MessageList {
                 let mut rust = self.as_mut().rust_mut();
                 let msgs = rust.messages.clone();
                 let me_id = rust.me_participant_id.clone();
-                rust.cache.insert(selected, (msgs, me_id));
+                let cache_cursor = rust.next_cursor.clone();
+                rust.cache.insert(selected, (msgs, me_id, cache_cursor));
             }
         }
 

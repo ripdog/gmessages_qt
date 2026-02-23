@@ -1,6 +1,6 @@
 # Maintainer: ripdog <ripdog@example.com>
 pkgname=kourier
-pkgver=0.1.1
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="An unofficial native KDE client for Google Messages"
 arch=('x86_64' 'aarch64')

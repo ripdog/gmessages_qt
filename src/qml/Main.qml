@@ -253,6 +253,12 @@ Kirigami.ApplicationWindow {
                     topMargin: Math.round(Kirigami.Units.smallSpacing / 2)
                     reuseItems: true
 
+                    onAtYEndChanged: {
+                        if (atYEnd && count > 0 && !root.conversationList.loading) {
+                            root.conversationList.load_more()
+                        }
+                    }
+
                     delegate: Delegates.RoundedItemDelegate {
                         id: conversationDelegate
 
@@ -408,19 +414,53 @@ Kirigami.ApplicationWindow {
                         model: root.messageListModel
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
-                        bottomMargin: Kirigami.Units.gridUnit
                         verticalLayoutDirection: ListView.BottomToTop
                         spacing: Kirigami.Units.mediumSpacing
                         reuseItems: true
                         visible: !root.messageListModel.loading && root.selectedConversationIndex >= 0
 
-                        // Smart scroll: only auto-scroll when user is already at the bottom
+                        // ── Load-more state ──
+                        property int _preLoadCount: 0
+                        property bool _awaitingLoadMore: false
+                        property bool _suppressLoadMore: false
+
+                        // ── BottomToTop coordinate mapping (empirically verified) ──
+                        // atYEnd     = visual BOTTOM (newest messages, contentY ≈ -height)
+                        // atYBeginning = visual TOP (oldest messages, contentY ≈ originY)
+
+                        // ── Bottom tracking ──
+                        // Only set userAtBottom=FALSE here (safe: just shows button).
+                        // Setting TRUE from contentY changes causes feedback loops with media loading.
                         onContentYChanged: {
-                            root.userAtBottom = atYBeginning
+                            if (!atYEnd) {
+                                root.userAtBottom = false
+                            }
+                        }
+
+                        // userAtBottom=TRUE only on user-initiated scroll completion
+                        onMovementEnded: {
+                            root.userAtBottom = atYEnd
+
+                            // Trigger load_more when scrolled to visual top (oldest messages)
+                            if (atYBeginning && !atYEnd && !_awaitingLoadMore && !_suppressLoadMore
+                                    && count > 0 && !root.messageListModel.loading && visible) {
+                                _preLoadCount = count
+                                _awaitingLoadMore = true
+                                root.messageListModel.load_more()
+                            }
                         }
 
                         onCountChanged: {
-                            if (count > 0 && root.userAtBottom) {
+                            // After load_more: Qt preserves viewport for appended items
+                            // via begin_insert_rows, so we just clear the flag
+                            if (_awaitingLoadMore && count > _preLoadCount && _preLoadCount > 0) {
+                                _awaitingLoadMore = false
+                                _preLoadCount = 0
+                                return
+                            }
+
+                            // Auto-scroll for new incoming messages only if at bottom
+                            if (count > 0 && root.userAtBottom && !_awaitingLoadMore) {
                                 scrollTimer.restart()
                             }
                             if (!root.messageListModel.loading && count > root.lastMessageCount) {
@@ -429,23 +469,33 @@ Kirigami.ApplicationWindow {
                             root.lastMessageCount = count
                         }
 
-                        // When model resets (new conversation loaded), always scroll to bottom
+                        // When conversation loads, scroll to bottom and suppress load_more
                         Connections {
                             target: root.messageListModel
                             function onLoadingChanged() {
                                 if (!root.messageListModel.loading && messageList.count > 0) {
                                     root.userAtBottom = true
+                                    messageList._awaitingLoadMore = false
+                                    messageList._suppressLoadMore = true
+                                    suppressTimer.restart()
                                     scrollTimer.restart()
                                 }
                             }
                         }
 
+                        // Suppress load_more for 1s after conversation load
+                        Timer {
+                            id: suppressTimer
+                            interval: 1000
+                            onTriggered: messageList._suppressLoadMore = false
+                        }
+
                         Timer {
                             id: scrollTimer
-                            interval: 100
+                            interval: 50
                             repeat: false
                             onTriggered: {
-                                messageList.positionViewAtBeginning()
+                                messageList.positionViewAtEnd()
                                 root.userAtBottom = true
                             }
                         }
@@ -465,7 +515,7 @@ Kirigami.ApplicationWindow {
                         icon.name: "go-down"
                         visible: !root.userAtBottom && messageList.visible && messageList.count > 0
                         onClicked: {
-                            messageList.positionViewAtBeginning()
+                            messageList.positionViewAtEnd()
                             root.userAtBottom = true
                         }
                         z: 1

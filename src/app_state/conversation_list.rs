@@ -33,6 +33,8 @@ pub struct ConversationListRust {
     filter_text: String,
     pub loading: bool,
     avatar_by_identifier: HashMap<String, String>,
+    next_cursor: Option<libgmessages_rs::proto::client::Cursor>,
+    loading_more: bool,
 }
 
 impl Default for ConversationListRust {
@@ -43,6 +45,8 @@ impl Default for ConversationListRust {
             filter_text: String::new(),
             loading: false,
             avatar_by_identifier: HashMap::new(),
+            next_cursor: None,
+            loading_more: false,
         }
     }
 }
@@ -91,23 +95,21 @@ impl crate::ffi::ConversationList {
                 let client = ensure_client().await?;
                 let handler = make_handler(&client).await?;
 
-                let request =
-                    libgmessages_rs::proto::client::ListConversationsRequest {
-                        count: 40,
-                        folder:
-                            libgmessages_rs::proto::client::list_conversations_request::Folder::Inbox
-                                as i32,
-                        cursor: None,
-                    };
-                let response: libgmessages_rs::proto::client::ListConversationsResponse =
-                    handler
-                        .send_request(
-                            libgmessages_rs::proto::rpc::ActionType::ListConversations,
-                            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                            &request,
-                        )
-                        .await
-                        .map_err(|e| e.to_string())?;
+                let request = libgmessages_rs::proto::client::ListConversationsRequest {
+                    count: 40,
+                    folder:
+                        libgmessages_rs::proto::client::list_conversations_request::Folder::Inbox
+                            as i32,
+                    cursor: None,
+                };
+                let response: libgmessages_rs::proto::client::ListConversationsResponse = handler
+                    .send_request(
+                        libgmessages_rs::proto::rpc::ActionType::ListConversations,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &request,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
 
                 let mut items: Vec<ConversationItem> = response
                     .conversations
@@ -135,6 +137,7 @@ impl crate::ffi::ConversationList {
                     }
                 }
 
+                let cursor = response.cursor.clone();
                 // Push items to UI immediately
                 let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
                     qobject.as_mut().begin_reset_model();
@@ -142,6 +145,7 @@ impl crate::ffi::ConversationList {
                     rust.avatar_by_identifier.clear();
                     rust.all_items = items;
                     rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
+                    rust.next_cursor = cursor;
                     qobject.as_mut().set_loading(false);
                     qobject.as_mut().end_reset_model();
                 });
@@ -151,24 +155,29 @@ impl crate::ffi::ConversationList {
                     let client_for_avatars = client.clone();
                     let ui_for_avatars = ui_thread.clone();
                     spawn(async move {
-                        let new_avatars = fetch_avatars_async(client_for_avatars, avatar_identifiers).await;
+                        let new_avatars =
+                            fetch_avatars_async(client_for_avatars, avatar_identifiers).await;
                         if !new_avatars.is_empty() {
-                            let _ = ui_for_avatars.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
-                                qobject.as_mut().begin_reset_model();
-                                let mut rust = qobject.as_mut().rust_mut();
-                                for (id, url) in &new_avatars {
-                                    rust.avatar_by_identifier.insert(id.clone(), url.clone());
-                                }
-                                for item in &mut rust.all_items {
-                                    if let Some(url) = new_avatars.get(&item.avatar_identifier) {
-                                        if !url.is_empty() {
-                                            item.avatar_url = QString::from(url.as_str());
+                            let _ = ui_for_avatars.queue(
+                                move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                                    qobject.as_mut().begin_reset_model();
+                                    let mut rust = qobject.as_mut().rust_mut();
+                                    for (id, url) in &new_avatars {
+                                        rust.avatar_by_identifier.insert(id.clone(), url.clone());
+                                    }
+                                    for item in &mut rust.all_items {
+                                        if let Some(url) = new_avatars.get(&item.avatar_identifier)
+                                        {
+                                            if !url.is_empty() {
+                                                item.avatar_url = QString::from(url.as_str());
+                                            }
                                         }
                                     }
-                                }
-                                rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
-                                qobject.as_mut().end_reset_model();
-                            });
+                                    rust.filtered_items =
+                                        filter_items(&rust.all_items, &rust.filter_text);
+                                    qobject.as_mut().end_reset_model();
+                                },
+                            );
                         }
                     });
                 }
@@ -178,20 +187,177 @@ impl crate::ffi::ConversationList {
             .await;
 
             if let Err(error) = result {
-                let is_auth_error =
-                    error.contains("authentication credential") || error.contains("401") || error.contains("403");
+                let is_auth_error = error.contains("authentication credential")
+                    || error.contains("401")
+                    || error.contains("403");
                 eprintln!("conversation load failed: {error}");
-                let _ = qt_thread.queue(
-                    move |mut qobject: Pin<&mut ffi::ConversationList>| {
-                        qobject.as_mut().rust_mut().avatar_by_identifier.clear();
-                        qobject.as_mut().set_loading(false);
-                        if is_auth_error {
-                            qobject
-                                .as_mut()
-                                .auth_error(&QString::from(error.as_str()));
+                let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                    qobject.as_mut().rust_mut().avatar_by_identifier.clear();
+                    qobject.as_mut().set_loading(false);
+                    if is_auth_error {
+                        qobject.as_mut().auth_error(&QString::from(error.as_str()));
+                    }
+                });
+            }
+        });
+    }
+
+    pub fn load_more(mut self: Pin<&mut Self>) {
+        if self.rust().loading || self.rust().loading_more {
+            return;
+        }
+        let cursor = self.rust().next_cursor.clone();
+        if cursor.is_none() {
+            return; // No more items
+        }
+
+        let mut rust = self.as_mut().rust_mut();
+        rust.loading_more = true;
+        drop(rust);
+
+        let qt_thread: CxxQtThread<ffi::ConversationList> = self.qt_thread();
+        let ui_thread = qt_thread.clone();
+
+        spawn(async move {
+            let result: Result<(), String> = async {
+                let client = ensure_client().await?;
+                let handler = make_handler(&client).await?;
+
+                let request = libgmessages_rs::proto::client::ListConversationsRequest {
+                    count: 40,
+                    folder:
+                        libgmessages_rs::proto::client::list_conversations_request::Folder::Inbox
+                            as i32,
+                    cursor: cursor.clone(),
+                };
+                let response: libgmessages_rs::proto::client::ListConversationsResponse = handler
+                    .send_request(
+                        libgmessages_rs::proto::rpc::ActionType::ListConversations,
+                        libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                        &request,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let mut items: Vec<ConversationItem> = response
+                    .conversations
+                    .into_iter()
+                    .map(|convo| conversation_to_item(&convo))
+                    .collect();
+
+                items.sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
+
+                // Collect avatar identifiers and populate from cache if available
+                let mut avatar_identifiers: Vec<String> = Vec::new();
+                {
+                    let cache = shared().avatars.read().await;
+                    for item in &mut items {
+                        if item.avatar_identifier.is_empty() {
+                            continue;
                         }
-                    },
-                );
+                        if let Some(url) = cache.get(&item.avatar_identifier) {
+                            item.avatar_url = QString::from(url.as_str());
+                        } else {
+                            if !avatar_identifiers.contains(&item.avatar_identifier) {
+                                avatar_identifiers.push(item.avatar_identifier.clone());
+                            }
+                        }
+                    }
+                }
+
+                let new_cursor = response.cursor.clone();
+
+                let _ = ui_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                    let mut rust = qobject.as_mut().rust_mut();
+                    rust.loading_more = false;
+                    rust.next_cursor = new_cursor;
+
+                    let new_filtered = filter_items(&items, &rust.filter_text);
+                    let count = new_filtered.len();
+                    let insert_pos = rust.filtered_items.len();
+
+                    rust.all_items.extend(items.clone());
+                    rust.all_items
+                        .sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
+                    drop(rust);
+
+                    if count > 0 {
+                        qobject.as_mut().begin_insert_rows(
+                            &crate::ffi::QModelIndex::default(),
+                            insert_pos as i32,
+                            (insert_pos + count - 1) as i32,
+                        );
+                        let mut rust = qobject.as_mut().rust_mut();
+                        rust.filtered_items.extend(new_filtered);
+                        drop(rust);
+                        qobject.as_mut().end_insert_rows();
+                    }
+                });
+
+                // Fetch missing avatars in background for new items
+                if !avatar_identifiers.is_empty() {
+                    let client_for_avatars = client.clone();
+                    let ui_for_avatars = ui_thread.clone();
+                    spawn(async move {
+                        let new_avatars =
+                            fetch_avatars_async(client_for_avatars, avatar_identifiers).await;
+                        if !new_avatars.is_empty() {
+                            let _ = ui_for_avatars.queue(
+                                move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                                    let mut rust = qobject.as_mut().rust_mut();
+
+                                    // Cache newly fetched avatars
+                                    for (id, url) in &new_avatars {
+                                        rust.avatar_by_identifier.insert(id.clone(), url.clone());
+                                    }
+
+                                    // Apply them to all items (avoids QML redraw if we use dataChanged instead of reset)
+                                    let mut changed_indices = Vec::new();
+                                    for (i, item) in rust.filtered_items.iter_mut().enumerate() {
+                                        if let Some(url) = new_avatars.get(&item.avatar_identifier)
+                                        {
+                                            if !url.is_empty() {
+                                                item.avatar_url = QString::from(url.as_str());
+                                                changed_indices.push(i as i32);
+                                            }
+                                        }
+                                    }
+                                    for item in &mut rust.all_items {
+                                        if let Some(url) = new_avatars.get(&item.avatar_identifier)
+                                        {
+                                            if !url.is_empty() {
+                                                item.avatar_url = QString::from(url.as_str());
+                                            }
+                                        }
+                                    }
+
+                                    drop(rust);
+
+                                    // emit dataChanged for each affected row to avoid reset_model jump
+                                    for idx in changed_indices {
+                                        let model_index = qobject.as_ref().index(
+                                            idx,
+                                            0,
+                                            &crate::ffi::QModelIndex::default(),
+                                        );
+                                        qobject.as_mut().data_changed(&model_index, &model_index);
+                                    }
+                                },
+                            );
+                        }
+                    });
+                }
+
+                Ok(())
+            }
+            .await;
+
+            if let Err(error) = result {
+                eprintln!("conversation load_more failed: {error}");
+                let _ = qt_thread.queue(move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                    let mut rust = qobject.as_mut().rust_mut();
+                    rust.loading_more = false;
+                });
             }
         });
     }
@@ -289,9 +455,19 @@ impl crate::ffi::ConversationList {
 
     pub fn mark_conversation_read(mut self: Pin<&mut Self>, conversation_id: &QString) {
         let convo_id = conversation_id.to_string();
-        if let Some(pos) = self.rust().filtered_items.iter().position(|item| item.conversation_id == convo_id) {
+        if let Some(pos) = self
+            .rust()
+            .filtered_items
+            .iter()
+            .position(|item| item.conversation_id == convo_id)
+        {
             if self.rust().filtered_items[pos].unread {
-                let all_pos = self.rust().all_items.iter().position(|item| item.conversation_id == convo_id).unwrap();
+                let all_pos = self
+                    .rust()
+                    .all_items
+                    .iter()
+                    .position(|item| item.conversation_id == convo_id)
+                    .unwrap();
                 let mut rust = self.as_mut().rust_mut();
                 rust.all_items[all_pos].unread = false;
                 rust.filtered_items[pos].unread = false;
@@ -310,15 +486,21 @@ impl crate::ffi::ConversationList {
     ) {
         let convo_id = conversation_id.to_string();
         let preview_str = preview.to_string();
-        
+
         let mut rust = self.as_mut().rust_mut();
-        if let Some(pos) = rust.all_items.iter().position(|i| i.conversation_id == convo_id) {
+        if let Some(pos) = rust
+            .all_items
+            .iter()
+            .position(|i| i.conversation_id == convo_id)
+        {
             if timestamp_micros >= rust.all_items[pos].last_message_timestamp {
                 rust.all_items[pos].preview = QString::from(preview_str);
                 rust.all_items[pos].last_message_timestamp = timestamp_micros;
-                rust.all_items[pos].last_message_time = QString::from(format_human_timestamp(timestamp_micros));
-                
-                rust.all_items.sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
+                rust.all_items[pos].last_message_time =
+                    QString::from(format_human_timestamp(timestamp_micros));
+
+                rust.all_items
+                    .sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
                 rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
                 drop(rust);
                 self.as_mut().begin_reset_model();
@@ -377,4 +559,3 @@ pub fn conversation_to_item(
         last_message_time,
     }
 }
-
