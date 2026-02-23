@@ -197,6 +197,7 @@ mod ffi {
         #[qml_element]
         #[base = QAbstractListModel]
         #[qproperty(bool, loading)]
+        #[qproperty(bool, loading_more)]
         type MessageList = super::MessageListRust;
 
         #[cxx_override]

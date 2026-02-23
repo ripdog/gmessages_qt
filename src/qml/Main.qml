@@ -507,6 +507,16 @@ Kirigami.ApplicationWindow {
                         delegate: MessageDelegate {}
                     }
 
+                    // Loading indicator for older messages
+                    Controls.BusyIndicator {
+                        anchors.top: parent.top
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.topMargin: Kirigami.Units.largeSpacing
+                        running: root.messageListModel.loading_more
+                        visible: running
+                        z: 1
+                    }
+
                     // Jump-to-bottom button
                     Controls.RoundButton {
                         anchors.bottom: parent.bottom

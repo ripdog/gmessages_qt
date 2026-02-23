@@ -637,11 +637,9 @@ impl crate::ffi::MessageList {
             return;
         }
 
-        let mut rust = self.as_mut().rust_mut();
-        rust.loading_more = true;
-        let conversation_id = rust.selected_conversation_id.clone();
-        let me_id = rust.me_participant_id.clone();
-        drop(rust);
+        let conversation_id = self.rust().selected_conversation_id.clone();
+        let me_id = self.rust().me_participant_id.clone();
+        self.as_mut().set_loading_more(true);
 
         let qt_thread: cxx_qt::CxxQtThread<ffi::MessageList> = self.qt_thread();
 
@@ -732,8 +730,8 @@ impl crate::ffi::MessageList {
                     let qt_thread_clone = qt_thread.clone();
                     let _ = qt_thread.queue(
                         move |mut qobject: core::pin::Pin<&mut ffi::MessageList>| {
+                            qobject.as_mut().set_loading_more(false);
                             let mut rust = qobject.as_mut().rust_mut();
-                            rust.loading_more = false;
                             if rust.selected_conversation_id == convo_id {
                                 // Map avatars from existing messages
                                 let mut pid_to_url = std::collections::HashMap::new();
@@ -762,7 +760,10 @@ impl crate::ffi::MessageList {
                                 drop(rust);
 
                                 if count > 0 {
-                                    eprintln!("MessageList::load_more: inserting {} messages at pos {}", count, insert_pos);
+                                    eprintln!(
+                                        "MessageList::load_more: inserting {} messages at pos {}",
+                                        count, insert_pos
+                                    );
                                     qobject.as_mut().begin_insert_rows(
                                         &crate::ffi::QModelIndex::default(),
                                         insert_pos as i32,
@@ -867,7 +868,7 @@ impl crate::ffi::MessageList {
                 Err(error) => {
                     let _ = qt_thread.queue(
                         move |mut qobject: core::pin::Pin<&mut ffi::MessageList>| {
-                            qobject.as_mut().rust_mut().loading_more = false;
+                            qobject.as_mut().set_loading_more(false);
                         },
                     );
                 }
