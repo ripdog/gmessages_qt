@@ -1595,7 +1595,7 @@ impl crate::ffi::MessageList {
             }
         }
 
-        if body.trim().is_empty() {
+        if !is_media && body.trim().is_empty() {
             return;
         }
 
@@ -1603,6 +1603,18 @@ impl crate::ffi::MessageList {
         let status = map_message_status(status_code, from_me);
         let body_str = body.clone();
         let msg_id_str = message_id.clone();
+        let mut avatar_url = String::new();
+        if !from_me && !participant_id.is_empty() {
+            if let Some(existing) = self
+                .rust()
+                .messages
+                .iter()
+                .find(|m| m.participant_id == participant_id && !m.avatar_url.is_empty())
+            {
+                avatar_url = existing.avatar_url.to_string();
+            }
+        }
+
         let new_item = MessageItem {
             body: QString::from(body),
             from_me,
@@ -1612,7 +1624,7 @@ impl crate::ffi::MessageList {
             status: QString::from(status),
             media_url: QString::from(""),
             is_media,
-            avatar_url: QString::from(""),
+            avatar_url: QString::from(avatar_url.as_str()),
             is_info: status_code >= 200,
             participant_id: participant_id.clone(),
             mime_type: QString::from(""),
@@ -1627,7 +1639,7 @@ impl crate::ffi::MessageList {
         let insert_pos = self
             .rust()
             .messages
-            .partition_point(|item| item.timestamp_micros <= timestamp_micros);
+            .partition_point(|item| item.timestamp_micros > timestamp_micros);
         let insert_pos_i32 = insert_pos as i32;
 
         self.as_mut()

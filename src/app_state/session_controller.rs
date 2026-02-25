@@ -184,7 +184,7 @@ pub async fn run_long_poll_loop(
     let heartbeat_handler = handler.clone();
     let heartbeat = tokio::spawn(async move {
         while !heartbeat_stop.load(std::sync::atomic::Ordering::Relaxed) {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
             let session_id = heartbeat_handler.session_id().to_string();
             let _ = heartbeat_handler
                 .client()
@@ -253,6 +253,12 @@ pub async fn run_long_poll_loop(
             libgmessages_rs::proto::events::update_events::Event::MessageEvent(message_event) => {
                 for message in message_event.data {
                     let body = extract_message_body(&message);
+
+                    eprintln!("\n=== NEW MESSAGE RECEIVED ===");
+                    eprintln!("Body empty?: {}", body.trim().is_empty());
+                    eprintln!("Timestamp parsed: {}", message.timestamp);
+                    eprintln!("{:#?}", message);
+                    eprintln!("============================\n");
 
                     let conversation_id = message.conversation_id.clone();
                     let participant_id = message.participant_id.clone();

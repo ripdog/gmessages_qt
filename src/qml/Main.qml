@@ -495,7 +495,7 @@ Kirigami.ApplicationWindow {
                             interval: 50
                             repeat: false
                             onTriggered: {
-                                messageList.positionViewAtEnd()
+                                messageList.positionViewAtBeginning()
                                 root.userAtBottom = true
                             }
                         }
