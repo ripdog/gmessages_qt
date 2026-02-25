@@ -1560,18 +1560,24 @@ impl crate::ffi::MessageList {
                     || (!tmp_id.is_empty() && item.message_id == tmp_id)
             });
             if let Some(index) = index {
-                // if status_code == 300 {
-                //     self.as_mut().begin_remove_rows(&QModelIndex::default(), index as i32, index as i32);
-                //     let mut rust = self.as_mut().rust_mut();
-                //     rust.messages.remove(index);
-                //     let convo_id = rust.selected_conversation_id.clone();
-                //     let msgs_clone = rust.messages.clone();
-                //     let me_id = rust.me_participant_id.clone();
-                //     rust.cache.insert(convo_id, (msgs_clone, me_id));
-                //     drop(rust);
-                //     self.as_mut().end_remove_rows();
-                //     return;
-                // }
+                if status_code == 300 {
+                    self.as_mut().begin_remove_rows(
+                        &QModelIndex::default(),
+                        index as i32,
+                        index as i32,
+                    );
+                    let mut rust = self.as_mut().rust_mut();
+                    rust.messages.remove(index);
+                    let convo_id = rust.selected_conversation_id.clone();
+                    let msgs_clone = rust.messages.clone();
+                    let me_id = rust.me_participant_id.clone();
+                    let cache_cursor = rust.next_cursor.clone();
+                    rust.cache
+                        .insert(convo_id, (msgs_clone, me_id, cache_cursor));
+                    drop(rust);
+                    self.as_mut().end_remove_rows();
+                    return;
+                }
 
                 let next_status = map_message_status(status_code, from_me);
 
