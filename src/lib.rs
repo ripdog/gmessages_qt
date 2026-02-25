@@ -243,6 +243,9 @@ mod ffi {
         fn delete_message(self: Pin<&mut MessageList>, message_id: &QString);
 
         #[qinvokable]
+        fn mark_latest_as_read(self: Pin<&mut MessageList>);
+
+        #[qinvokable]
         fn handle_message_event(
             self: Pin<&mut MessageList>,
             conversation_id: &QString,

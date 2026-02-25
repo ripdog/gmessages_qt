@@ -22,6 +22,14 @@ Kirigami.ApplicationWindow {
         }
     }
 
+    onActiveChanged: {
+        if (active && root.selectedConversationIndex >= 0) {
+            const convoId = root.conversationList.conversation_id(root.selectedConversationIndex);
+            root.messageListModel.mark_latest_as_read();
+            root.conversationList.mark_conversation_read(convoId);
+        }
+    }
+
     Platform.SystemTrayIcon {
         id: trayIcon
         visible: true
@@ -813,6 +821,11 @@ Kirigami.ApplicationWindow {
             
             if (isMedia && mediaId.length > 0) {
                 messageListModel.queue_media_download(messageId.length > 0 ? messageId : tmpId, mediaId, decryptionKey, mimeType)
+            }
+
+            if (root.active && root.selectedConversationIndex >= 0 && root.conversationList.conversation_id(root.selectedConversationIndex) === conversationId) {
+                root.messageListModel.mark_latest_as_read();
+                root.conversationList.mark_conversation_read(conversationId);
             }
         }
 

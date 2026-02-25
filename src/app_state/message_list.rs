@@ -1500,6 +1500,31 @@ impl crate::ffi::MessageList {
         });
     }
 
+    pub fn mark_latest_as_read(self: Pin<&mut Self>) {
+        if self.rust().messages.is_empty() {
+            return;
+        }
+
+        let conversation_id = self.rust().selected_conversation_id.clone();
+
+        let Some(latest_msg) = self
+            .rust()
+            .messages
+            .iter()
+            .find(|m| !m.message_id.is_empty())
+        else {
+            return;
+        };
+
+        let msg_id = latest_msg.message_id.clone();
+
+        spawn(async move {
+            if let Some(client) = get_client().await {
+                let _ = client.mark_message_read(&conversation_id, &msg_id).await;
+            }
+        });
+    }
+
     pub fn handle_message_event(
         mut self: Pin<&mut Self>,
         conversation_id: &QString,
