@@ -24,6 +24,8 @@ Item {
     required property string link_url
     required property string link_title
     required property string link_image_url
+    required property int media_width
+    required property int media_height
 
     required property bool is_start_of_day
 
@@ -167,8 +169,21 @@ Item {
 
                     // ── Image media ──
                     Image {
-                        Layout.maximumWidth: messageCol.width * 0.6
-                        Layout.maximumHeight: Kirigami.Units.gridUnit * 15
+                        id: mediaImage
+                        // Calculate stable height from server-provided dimensions
+                        readonly property real maxW: messageCol.width * 0.6
+                        readonly property real maxH: Kirigami.Units.gridUnit * 15
+                        readonly property bool hasDimensions: messageDelegate.media_width > 0 && messageDelegate.media_height > 0
+                        readonly property real scaledHeight: hasDimensions
+                            ? Math.min(maxH, (messageDelegate.media_height / messageDelegate.media_width) * Math.min(maxW, messageDelegate.media_width))
+                            : -1
+
+                        Layout.maximumWidth: maxW
+                        Layout.maximumHeight: maxH
+                        Layout.preferredHeight: hasDimensions ? scaledHeight : -1
+                        Layout.preferredWidth: hasDimensions
+                            ? Math.min(maxW, messageDelegate.media_width * (scaledHeight / messageDelegate.media_height))
+                            : -1
                         Layout.alignment: Qt.AlignHCenter
                         Layout.margins: 0
                         fillMode: Image.PreserveAspectFit

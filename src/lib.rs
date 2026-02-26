@@ -83,6 +83,8 @@ mod ffi {
             media_id: &QString,
             decryption_key: &QString,
             mime_type: &QString,
+            media_width: i64,
+            media_height: i64,
         );
 
         #[qsignal]
@@ -257,6 +259,8 @@ mod ffi {
             timestamp_micros: i64,
             status_code: i32,
             is_media: bool,
+            media_width: i64,
+            media_height: i64,
         );
 
         #[qinvokable]

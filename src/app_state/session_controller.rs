@@ -275,11 +275,12 @@ pub async fn run_long_poll_loop(
                     let media = extract_message_media(&message);
                     let is_media = media.is_some();
 
-                    let (media_id, decryption_key, mime_type) = if let Some(m) = &media {
-                        (m.0.clone(), STANDARD.encode(&m.1), m.2.clone())
-                    } else {
-                        (String::new(), String::new(), String::new())
-                    };
+                    let (media_id, decryption_key, mime_type, media_width, media_height) =
+                        if let Some(m) = &media {
+                            (m.0.clone(), STANDARD.encode(&m.1), m.2.clone(), m.3, m.4)
+                        } else {
+                            (String::new(), String::new(), String::new(), 0, 0)
+                        };
 
                     let _ =
                         qt_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
@@ -296,6 +297,8 @@ pub async fn run_long_poll_loop(
                                 &QString::from(media_id.as_str()),
                                 &QString::from(decryption_key.as_str()),
                                 &QString::from(mime_type.as_str()),
+                                media_width,
+                                media_height,
                             );
                         });
 
@@ -379,7 +382,7 @@ pub fn extract_message_id(message: &libgmessages_rs::proto::conversations::Messa
 /// Extract media information from a Message, if present.
 pub fn extract_message_media(
     message: &libgmessages_rs::proto::conversations::Message,
-) -> Option<(String, Vec<u8>, String)> {
+) -> Option<(String, Vec<u8>, String, i64, i64)> {
     message
         .message_info
         .iter()
@@ -397,7 +400,12 @@ pub fn extract_message_media(
                 } else {
                     media.thumbnail_decryption_key.clone()
                 };
-                Some((id, key, media.mime_type.clone()))
+                let (width, height) = if let Some(dim) = &media.dimensions {
+                    (dim.width, dim.height)
+                } else {
+                    (0, 0)
+                };
+                Some((id, key, media.mime_type.clone(), width, height))
             }
             _ => None,
         })

@@ -815,8 +815,8 @@ Kirigami.ApplicationWindow {
     Connections {
         target: sessionController
 
-        function onMessage_received(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia, mediaId, decryptionKey, mimeType) {
-            messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia)
+        function onMessage_received(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia, mediaId, decryptionKey, mimeType, mediaWidth, mediaHeight) {
+            messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia, mediaWidth, mediaHeight)
             conversationList.update_preview(conversationId, isMedia ? "Media" : body, timestampMicros)
             
             if (isMedia && mediaId.length > 0) {

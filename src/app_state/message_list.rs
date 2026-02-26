@@ -40,6 +40,8 @@ pub struct MessageItem {
     pub link_url: QString,
     pub link_title: QString,
     pub link_image_url: QString,
+    pub media_width: i64,
+    pub media_height: i64,
 }
 
 pub struct MessageListRust {
@@ -119,6 +121,8 @@ impl crate::ffi::MessageList {
             16 => QVariant::from(&item.link_url),
             17 => QVariant::from(&item.link_title),
             18 => QVariant::from(&item.link_image_url),
+            19 => QVariant::from(&item.media_width),
+            20 => QVariant::from(&item.media_height),
             _ => QVariant::default(),
         }
     }
@@ -144,6 +148,8 @@ impl crate::ffi::MessageList {
         roles.insert(16, "link_url".into());
         roles.insert(17, "link_title".into());
         roles.insert(18, "link_image_url".into());
+        roles.insert(19, "media_width".into());
+        roles.insert(20, "media_height".into());
         roles
     }
 
@@ -291,13 +297,14 @@ impl crate::ffi::MessageList {
                         let message_id = extract_message_id(&message);
 
                         let is_media = media.is_some();
-                        let media_mime = if let Some((id, key, ref mime)) = media {
-                            let m = mime.clone();
-                            media_downloads.push((message_id.clone(), id, key, mime.clone()));
-                            m
-                        } else {
-                            String::new()
-                        };
+                        let (media_mime, media_width, media_height) =
+                            if let Some((id, key, ref mime, w, h)) = media {
+                                let m = mime.clone();
+                                media_downloads.push((message_id.clone(), id, key, mime.clone()));
+                                (m, w, h)
+                            } else {
+                                (String::new(), 0, 0)
+                            };
 
                         let mut avatar_url = String::new();
                         if !from_me && !message.participant_id.is_empty() {
@@ -325,6 +332,8 @@ impl crate::ffi::MessageList {
                             link_url: QString::from(""),
                             link_title: QString::from(""),
                             link_image_url: QString::from(""),
+                            media_width,
+                            media_height,
                         })
                     })
                     .collect();
@@ -809,13 +818,14 @@ impl crate::ffi::MessageList {
                         let message_id = extract_message_id(&message);
 
                         let is_media = media.is_some();
-                        let media_mime = if let Some((id, key, ref mime)) = media {
-                            let m = mime.clone();
-                            media_downloads.push((message_id.clone(), id, key, mime.clone()));
-                            m
-                        } else {
-                            String::new()
-                        };
+                        let (media_mime, media_width, media_height) =
+                            if let Some((id, key, ref mime, w, h)) = media {
+                                let m = mime.clone();
+                                media_downloads.push((message_id.clone(), id, key, mime.clone()));
+                                (m, w, h)
+                            } else {
+                                (String::new(), 0, 0)
+                            };
 
                         Some(MessageItem {
                             body: cxx_qt_lib::QString::from(body),
@@ -835,6 +845,8 @@ impl crate::ffi::MessageList {
                             link_url: cxx_qt_lib::QString::from(""),
                             link_title: cxx_qt_lib::QString::from(""),
                             link_image_url: cxx_qt_lib::QString::from(""),
+                            media_width,
+                            media_height,
                         })
                     })
                     .collect();
@@ -1036,6 +1048,8 @@ impl crate::ffi::MessageList {
                 link_url: QString::from(""),
                 link_title: QString::from(""),
                 link_image_url: QString::from(""),
+                media_width: 0,
+                media_height: 0,
             },
         );
         // We do not sort here because the new message naturally belongs at the beginning (index 0).
@@ -1224,6 +1238,8 @@ impl crate::ffi::MessageList {
                 link_url: QString::from(""),
                 link_title: QString::from(""),
                 link_image_url: QString::from(""),
+                media_width: 0,
+                media_height: 0,
             },
         );
         drop(rust);
@@ -1536,6 +1552,8 @@ impl crate::ffi::MessageList {
         timestamp_micros: i64,
         status_code: i32,
         is_media: bool,
+        media_width: i64,
+        media_height: i64,
     ) {
         let conversation_id = conversation_id.to_string();
         if conversation_id.is_empty() {
@@ -1664,6 +1682,8 @@ impl crate::ffi::MessageList {
             link_url: QString::from(""),
             link_title: QString::from(""),
             link_image_url: QString::from(""),
+            media_width,
+            media_height,
         };
 
         // Find insertion index (sorted by timestamp ascending)
