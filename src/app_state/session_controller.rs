@@ -83,16 +83,29 @@ impl crate::ffi::SessionController {
                         .await
                         .map_err(|e| e.to_string())?;
 
-                    let session_id = handler.session_id().to_string();
-                    let _ = client
-                        .send_rpc_message_with_id_and_session_no_payload(
-                            libgmessages_rs::proto::rpc::ActionType::GetUpdates,
-                            libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                            &session_id,
-                            &session_id,
-                            true,
-                        )
-                        .await;
+                    // Fire-and-forget: tell the server this stream is active.
+                    // This MUST happen before any send_request calls (like
+                    // ListConversations) because the server won't route RPC
+                    // responses down the stream until it has seen GetUpdates.
+                    let gu_client = client.clone();
+                    let gu_session_id = handler.session_id().to_string();
+                    tokio::spawn(async move {
+                        let _ = gu_client
+                            .send_rpc_message_with_id_and_session_no_payload(
+                                libgmessages_rs::proto::rpc::ActionType::GetUpdates,
+                                libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                                &gu_session_id,
+                                &gu_session_id,
+                                true,
+                            )
+                            .await;
+                    });
+
+                    let _ =
+                        session_thread.queue(|mut qobject: Pin<&mut ffi::SessionController>| {
+                            qobject.as_mut().set_status(QString::from("Connected"));
+                            qobject.as_mut().session_started();
+                        });
 
                     let inner_result =
                         run_long_poll_loop(stream, &handler, &stop_flag, &session_thread).await;
@@ -155,6 +168,32 @@ impl crate::ffi::SessionController {
         self.as_mut().set_running(false);
         self.as_mut().set_status(QString::from("Stopping..."));
     }
+
+    pub fn fetch_updates(self: Pin<&mut Self>) {
+        if !*self.running() {
+            return;
+        }
+        spawn(async move {
+            let client = match ensure_client().await {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            let handler = match make_handler(&client).await {
+                Ok(h) => h,
+                Err(_) => return,
+            };
+            let session_id = handler.session_id().to_string();
+            let _ = client
+                .send_rpc_message_with_id_and_session_no_payload(
+                    libgmessages_rs::proto::rpc::ActionType::GetUpdates,
+                    libgmessages_rs::proto::rpc::MessageType::BugleMessage,
+                    &session_id,
+                    &session_id,
+                    true,
+                )
+                .await;
+        });
+    }
 }
 
 /// Why the long-poll inner loop ended.
@@ -199,12 +238,35 @@ pub async fn run_long_poll_loop(
         }
     });
 
+    let mut settled = false;
+    let settle_duration = Duration::from_secs(3);
+    let settle_timer = tokio::time::sleep(settle_duration);
+    tokio::pin!(settle_timer);
+
     let result = loop {
         if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
             break Ok(StreamEndReason::Stopped);
         }
 
-        let item = stream.next().await;
+        let item = tokio::select! {
+            item = stream.next() => {
+                // Reset the settle timer every time we get data
+                if !settled {
+                    settle_timer.as_mut().reset(tokio::time::Instant::now() + settle_duration);
+                }
+                item
+            }
+            _ = &mut settle_timer, if !settled => {
+                // No events for 3 seconds — the initial burst is done
+                settled = true;
+                eprintln!("=== UPDATES SETTLED (3s of quiet) ===");
+                let _ = qt_thread.queue(|mut qobject: Pin<&mut ffi::SessionController>| {
+                    qobject.as_mut().updates_settled();
+                });
+                continue;
+            }
+        };
+
         let Some(item) = item else {
             break Ok(StreamEndReason::StreamEnded);
         };
@@ -225,8 +287,14 @@ pub async fn run_long_poll_loop(
             continue;
         };
         if skip_count > 0 {
-            skip_count -= 1;
-            continue;
+            // Only skip old payloads if there are no pending RPC requests.
+            // If a request is pending (e.g. ListConversations), its response
+            // might arrive during the skip window — we must process it.
+            let pending_len = handler.pending_len().await;
+            if pending_len == 0 {
+                skip_count -= 1;
+                continue;
+            }
         }
         let _ = handler.process_payload(data).await;
 
@@ -321,6 +389,20 @@ pub async fn run_long_poll_loop(
                     let last_message_timestamp = convo.last_message_timestamp;
                     let preview = build_preview(&convo);
                     let is_group_chat = convo.is_group_chat;
+                    let status = convo.status as i32;
+                    let avatar_identifier = convo
+                        .participants
+                        .iter()
+                        .find_map(|p| {
+                            if p.is_me {
+                                None
+                            } else if !p.contact_id.is_empty() {
+                                Some(p.contact_id.clone())
+                            } else {
+                                p.id.as_ref().map(|id| id.participant_id.clone())
+                            }
+                        })
+                        .unwrap_or_default();
 
                     let _ =
                         qt_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
@@ -331,6 +413,8 @@ pub async fn run_long_poll_loop(
                                 unread,
                                 last_message_timestamp,
                                 is_group_chat,
+                                status,
+                                &QString::from(avatar_identifier.as_str()),
                             );
                         });
                 }

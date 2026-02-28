@@ -114,10 +114,18 @@ impl crate::ffi::ConversationList {
                 let mut items: Vec<ConversationItem> = response
                     .conversations
                     .into_iter()
+                    .filter(|convo| convo.status == 1) // Only Active
                     .map(|convo| conversation_to_item(&convo))
                     .collect();
 
                 items.sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
+
+                eprintln!("\n=== LOAD CONVERSATIONS ===");
+                eprintln!(
+                    "Loaded {} conversations from ListConversations",
+                    items.len()
+                );
+                eprintln!("==========================\n");
 
                 // Collect avatar identifiers and populate from cache if available
                 let mut avatar_identifiers: Vec<String> = Vec::new();
@@ -148,6 +156,7 @@ impl crate::ffi::ConversationList {
                     rust.next_cursor = cursor;
                     qobject.as_mut().set_loading(false);
                     qobject.as_mut().end_reset_model();
+                    qobject.as_mut().loaded();
                 });
 
                 // Fetch missing avatars in background
@@ -397,11 +406,21 @@ impl crate::ffi::ConversationList {
         unread: bool,
         last_message_timestamp: i64,
         is_group_chat: bool,
+        status: i32,
+        avatar_identifier: &QString,
     ) {
+        if self.rust().loading {
+            return;
+        }
+
         let convo_id = conversation_id.to_string();
         let name_str = name.to_string();
         let preview_str = preview.to_string();
         let time_str = format_human_timestamp(last_message_timestamp);
+        let avatar_id = avatar_identifier.to_string();
+
+        let is_active =
+            status == libgmessages_rs::proto::conversations::ConversationStatus::Active as i32;
 
         // Find in all_items
         if let Some(pos) = self
@@ -412,13 +431,20 @@ impl crate::ffi::ConversationList {
         {
             self.as_mut().begin_reset_model();
             let mut rust = self.as_mut().rust_mut();
-            let item = &mut rust.all_items[pos];
-            item.name = QString::from(name_str.as_str());
-            item.preview = QString::from(preview_str.as_str());
-            item.unread = unread;
-            item.last_message_timestamp = last_message_timestamp;
-            item.last_message_time = QString::from(time_str.as_str());
-            item.is_group_chat = is_group_chat;
+            if !is_active {
+                rust.all_items.remove(pos);
+            } else {
+                let current_timestamp = rust.all_items[pos].last_message_timestamp;
+                if last_message_timestamp >= current_timestamp {
+                    let item = &mut rust.all_items[pos];
+                    item.name = QString::from(name_str.as_str());
+                    item.preview = QString::from(preview_str.as_str());
+                    item.unread = unread;
+                    item.last_message_timestamp = last_message_timestamp;
+                    item.last_message_time = QString::from(time_str.as_str());
+                    item.is_group_chat = is_group_chat;
+                }
+            }
 
             // Re-sort all_items by timestamp
             rust.all_items
@@ -429,12 +455,16 @@ impl crate::ffi::ConversationList {
             drop(rust);
             self.as_mut().end_reset_model();
         } else {
+            if !is_active {
+                return;
+            }
             // New conversation — insert it
+            let avatar_id_clone = avatar_id.clone();
             let new_item = ConversationItem {
                 name: QString::from(name_str.as_str()),
                 preview: QString::from(preview_str.as_str()),
-                avatar_url: QString::from(""),
-                avatar_identifier: String::new(),
+                avatar_url: QString::from(""), // Fetched below
+                avatar_identifier: avatar_id,
                 is_group_chat,
                 unread,
                 conversation_id: convo_id,
@@ -450,6 +480,37 @@ impl crate::ffi::ConversationList {
             rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
             drop(rust);
             self.as_mut().end_reset_model();
+
+            if !avatar_id_clone.is_empty() {
+                let qt_thread: CxxQtThread<ffi::ConversationList> = self.qt_thread();
+                spawn(async move {
+                    if let Ok(client) = ensure_client().await {
+                        let new_avatars = fetch_avatars_async(client, vec![avatar_id_clone]).await;
+                        if !new_avatars.is_empty() {
+                            let _ = qt_thread.queue(
+                                move |mut qobject: Pin<&mut ffi::ConversationList>| {
+                                    qobject.as_mut().begin_reset_model();
+                                    let mut rust = qobject.as_mut().rust_mut();
+                                    for (id, url) in &new_avatars {
+                                        rust.avatar_by_identifier.insert(id.clone(), url.clone());
+                                    }
+                                    for item in &mut rust.all_items {
+                                        if let Some(url) = new_avatars.get(&item.avatar_identifier)
+                                        {
+                                            if !url.is_empty() {
+                                                item.avatar_url = QString::from(url.as_str());
+                                            }
+                                        }
+                                    }
+                                    rust.filtered_items =
+                                        filter_items(&rust.all_items, &rust.filter_text);
+                                    qobject.as_mut().end_reset_model();
+                                },
+                            );
+                        }
+                    }
+                });
+            }
         }
     }
 
@@ -484,26 +545,36 @@ impl crate::ffi::ConversationList {
         preview: &QString,
         timestamp_micros: i64,
     ) {
+        if self.rust().loading {
+            return;
+        }
         let convo_id = conversation_id.to_string();
         let preview_str = preview.to_string();
 
-        let mut rust = self.as_mut().rust_mut();
-        if let Some(pos) = rust
+        let time_str = format_human_timestamp(timestamp_micros);
+
+        if let Some(pos) = self
+            .rust()
             .all_items
             .iter()
-            .position(|i| i.conversation_id == convo_id)
+            .position(|item| item.conversation_id == convo_id)
         {
-            if timestamp_micros >= rust.all_items[pos].last_message_timestamp {
-                rust.all_items[pos].preview = QString::from(preview_str);
-                rust.all_items[pos].last_message_timestamp = timestamp_micros;
-                rust.all_items[pos].last_message_time =
-                    QString::from(format_human_timestamp(timestamp_micros));
+            let current_timestamp = self.rust().all_items[pos].last_message_timestamp;
+            // Only update the preview if this message is newer than or equal to the current preview
+            if timestamp_micros >= current_timestamp {
+                self.as_mut().begin_reset_model();
+                let mut rust = self.as_mut().rust_mut();
+                let item = &mut rust.all_items[pos];
+                item.preview = QString::from(preview_str.as_str());
+                item.last_message_timestamp = timestamp_micros;
+                item.last_message_time = QString::from(time_str.as_str());
+                item.unread = true;
 
                 rust.all_items
                     .sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
+
                 rust.filtered_items = filter_items(&rust.all_items, &rust.filter_text);
                 drop(rust);
-                self.as_mut().begin_reset_model();
                 self.as_mut().end_reset_model();
             }
         }

@@ -795,7 +795,6 @@ Kirigami.ApplicationWindow {
             }
             if (appState.logged_in && !sessionController.running) {
                 sessionController.start()
-                conversationList.load()
             }
 
             if (appState.logged_in) {
@@ -815,6 +814,15 @@ Kirigami.ApplicationWindow {
     Connections {
         target: sessionController
 
+        function onSession_started() {
+            // Stream is connected, but GetUpdates burst may still be flowing.
+            // Wait for updates_settled before loading conversations.
+        }
+
+        function onUpdates_settled() {
+            root.conversationList.load()
+        }
+
         function onMessage_received(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia, mediaId, decryptionKey, mimeType, mediaWidth, mediaHeight) {
             messageListModel.handle_message_event(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia, mediaWidth, mediaHeight)
             conversationList.update_preview(conversationId, isMedia ? "Media" : body, timestampMicros)
@@ -829,8 +837,8 @@ Kirigami.ApplicationWindow {
             }
         }
 
-        function onConversation_updated(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat) {
-            conversationList.handle_conversation_event(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat)
+        function onConversation_updated(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat, status, avatarIdentifier) {
+            conversationList.handle_conversation_event(conversationId, name, preview, unread, lastMessageTimestamp, isGroupChat, status, avatarIdentifier)
 
             if (unread && lastMessageTimestamp > Date.now() * 1000 - 60000000) {
                 const isViewing = (root.selectedConversationIndex >= 0 && root.conversationList.conversation_id(root.selectedConversationIndex) === conversationId)

@@ -96,10 +96,21 @@ mod ffi {
             unread: bool,
             last_message_timestamp: i64,
             is_group_chat: bool,
+            status: i32,
+            avatar_identifier: &QString,
         );
+
+        #[qsignal]
+        fn session_started(self: Pin<&mut SessionController>);
+
+        #[qsignal]
+        fn updates_settled(self: Pin<&mut SessionController>);
 
         #[qinvokable]
         fn start(self: Pin<&mut SessionController>);
+
+        #[qinvokable]
+        fn fetch_updates(self: Pin<&mut SessionController>);
 
         #[qinvokable]
         fn stop(self: Pin<&mut SessionController>);
@@ -152,7 +163,12 @@ mod ffi {
             unread: bool,
             last_message_timestamp: i64,
             is_group_chat: bool,
+            status: i32,
+            avatar_identifier: &QString,
         );
+
+        #[qsignal]
+        fn loaded(self: Pin<&mut ConversationList>);
 
         #[qinvokable]
         fn mark_conversation_read(self: Pin<&mut ConversationList>, conversation_id: &QString);

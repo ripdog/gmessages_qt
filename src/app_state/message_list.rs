@@ -1563,6 +1563,10 @@ impl crate::ffi::MessageList {
             return;
         }
 
+        if self.rust().loading {
+            return;
+        }
+
         let participant_id = participant_id.to_string();
         let from_me = !self.rust().me_participant_id.is_empty()
             && participant_id == self.rust().me_participant_id;
