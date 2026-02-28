@@ -55,6 +55,14 @@ Item {
         width: parent.width
         spacing: Kirigami.Units.smallSpacing
 
+        TextInput {
+            id: clipboardHelper
+            visible: true
+            width: 0
+            height: 0
+            opacity: 0
+        }
+
         // Date header
         Item {
             Layout.fillWidth: true
@@ -486,6 +494,17 @@ Item {
 
                 Controls.Menu {
                     id: messageContextMenu
+
+                    Controls.MenuItem {
+                        text: "Copy text"
+                        icon.name: "edit-copy"
+                        enabled: messageDelegate.body.length > 0
+                        onTriggered: {
+                            clipboardHelper.text = messageDelegate.body;
+                            clipboardHelper.selectAll();
+                            clipboardHelper.copy();
+                        }
+                    }
 
                     Controls.MenuItem {
                         text: "Delete message"
