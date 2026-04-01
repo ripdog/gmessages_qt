@@ -431,6 +431,40 @@ Kirigami.ApplicationWindow {
                         property int _preLoadCount: 0
                         property bool _awaitingLoadMore: false
                         property bool _suppressLoadMore: false
+                        property int _scrollToLatestAttemptsRemaining: 0
+
+                        function scrollToLatestMessage() {
+                            if (count <= 0) {
+                                return
+                            }
+
+                            forceLayout()
+                            positionViewAtBeginning()
+                            positionViewAtIndex(0, ListView.End)
+                            root.userAtBottom = true
+                        }
+
+                        function scheduleScrollToLatest(attempts) {
+                            if (count <= 0 || !visible) {
+                                return
+                            }
+
+                            const retryCount = attempts === undefined ? 1 : attempts
+                            _scrollToLatestAttemptsRemaining = Math.max(
+                                _scrollToLatestAttemptsRemaining,
+                                retryCount
+                            )
+                            scrollTimer.restart()
+                        }
+
+                        function maybeLoadMore() {
+                            if (atYBeginning && !atYEnd && !_awaitingLoadMore && !_suppressLoadMore
+                                    && count > 0 && !root.messageListModel.loading && visible) {
+                                _preLoadCount = count
+                                _awaitingLoadMore = true
+                                root.messageListModel.load_more()
+                            }
+                        }
 
                         // ── BottomToTop coordinate mapping (empirically verified) ──
                         // atYEnd     = visual BOTTOM (newest messages, contentY ≈ -height)
@@ -450,12 +484,7 @@ Kirigami.ApplicationWindow {
                             root.userAtBottom = atYEnd
 
                             // Trigger load_more when scrolled to visual top (oldest messages)
-                            if (atYBeginning && !atYEnd && !_awaitingLoadMore && !_suppressLoadMore
-                                    && count > 0 && !root.messageListModel.loading && visible) {
-                                _preLoadCount = count
-                                _awaitingLoadMore = true
-                                root.messageListModel.load_more()
-                            }
+                            maybeLoadMore()
                         }
 
                         onCountChanged: {
@@ -469,12 +498,24 @@ Kirigami.ApplicationWindow {
 
                             // Auto-scroll for new incoming messages only if at bottom
                             if (count > 0 && root.userAtBottom && !_awaitingLoadMore) {
-                                scrollTimer.restart()
+                                scheduleScrollToLatest(3)
                             }
                             if (!root.messageListModel.loading && count > root.lastMessageCount) {
                                 root.statusVisibleIndex = 0
                             }
                             root.lastMessageCount = count
+                        }
+
+                        onContentHeightChanged: {
+                            if (root.userAtBottom && !_awaitingLoadMore && count > 0 && visible) {
+                                scheduleScrollToLatest(3)
+                            }
+                        }
+
+                        onHeightChanged: {
+                            if (root.userAtBottom && count > 0 && visible) {
+                                scheduleScrollToLatest(2)
+                            }
                         }
 
                         // When conversation loads, scroll to bottom and suppress load_more
@@ -486,7 +527,7 @@ Kirigami.ApplicationWindow {
                                     messageList._awaitingLoadMore = false
                                     messageList._suppressLoadMore = true
                                     suppressTimer.restart()
-                                    scrollTimer.restart()
+                                    messageList.scheduleScrollToLatest(4)
                                 }
                             }
                         }
@@ -500,11 +541,17 @@ Kirigami.ApplicationWindow {
 
                         Timer {
                             id: scrollTimer
-                            interval: 50
+                            interval: 16
                             repeat: false
                             onTriggered: {
-                                messageList.positionViewAtBeginning()
-                                root.userAtBottom = true
+                                messageList.scrollToLatestMessage()
+
+                                if (messageList._scrollToLatestAttemptsRemaining > 1) {
+                                    messageList._scrollToLatestAttemptsRemaining -= 1
+                                    scrollTimer.restart()
+                                } else {
+                                    messageList._scrollToLatestAttemptsRemaining = 0
+                                }
                             }
                         }
 
@@ -533,8 +580,7 @@ Kirigami.ApplicationWindow {
                         icon.name: "go-down"
                         visible: !root.userAtBottom && messageList.visible && messageList.count > 0
                         onClicked: {
-                            messageList.positionViewAtEnd()
-                            root.userAtBottom = true
+                            messageList.scrollToLatestMessage()
                         }
                         z: 1
                     }
