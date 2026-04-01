@@ -815,12 +815,13 @@ Kirigami.ApplicationWindow {
         target: sessionController
 
         function onSession_started() {
-            // Stream is connected, but GetUpdates burst may still be flowing.
-            // Wait for updates_settled before loading conversations.
+            root.conversationList.load()
         }
 
         function onUpdates_settled() {
-            root.conversationList.load()
+            if (!root.conversationList.loading) {
+                root.conversationList.load()
+            }
         }
 
         function onMessage_received(conversationId, participantId, body, transportType, messageId, tmpId, timestampMicros, statusCode, isMedia, mediaId, decryptionKey, mimeType, mediaWidth, mediaHeight) {
@@ -856,6 +857,10 @@ Kirigami.ApplicationWindow {
 
     Connections {
         target: conversationList
+
+        function onLoaded() {
+            sessionController.fetch_updates()
+        }
 
         function onAuth_error(message) {
             root.showPassiveNotification("Authentication error: " + message, "long")

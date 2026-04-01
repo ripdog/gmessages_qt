@@ -1,6 +1,7 @@
 mod app_state;
 
 use core::pin::Pin;
+use cxx_qt_lib_extras as _;
 
 pub use app_state::AppStateRust;
 pub use app_state::ConversationListRust;

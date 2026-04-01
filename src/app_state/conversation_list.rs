@@ -95,6 +95,10 @@ impl crate::ffi::ConversationList {
                 let client = ensure_client().await?;
                 let handler = make_handler(&client).await?;
 
+                // Use a long timeout (30s) because the long-poll stream is
+                // flooded with historical events the moment it opens.  The
+                // ListConversations RPC response is queued behind that flood
+                // and may take 10-15 seconds to arrive.
                 let request = libgmessages_rs::proto::client::ListConversationsRequest {
                     count: 40,
                     folder:
@@ -103,10 +107,11 @@ impl crate::ffi::ConversationList {
                     cursor: None,
                 };
                 let response: libgmessages_rs::proto::client::ListConversationsResponse = handler
-                    .send_request(
+                    .send_request_with_timeout(
                         libgmessages_rs::proto::rpc::ActionType::ListConversations,
                         libgmessages_rs::proto::rpc::MessageType::BugleMessage,
                         &request,
+                        std::time::Duration::from_secs(30),
                     )
                     .await
                     .map_err(|e| e.to_string())?;
@@ -114,18 +119,11 @@ impl crate::ffi::ConversationList {
                 let mut items: Vec<ConversationItem> = response
                     .conversations
                     .into_iter()
-                    .filter(|convo| convo.status == 1) // Only Active
+                    .filter(is_visible_conversation)
                     .map(|convo| conversation_to_item(&convo))
                     .collect();
 
                 items.sort_by(|a, b| b.last_message_timestamp.cmp(&a.last_message_timestamp));
-
-                eprintln!("\n=== LOAD CONVERSATIONS ===");
-                eprintln!(
-                    "Loaded {} conversations from ListConversations",
-                    items.len()
-                );
-                eprintln!("==========================\n");
 
                 // Collect avatar identifiers and populate from cache if available
                 let mut avatar_identifiers: Vec<String> = Vec::new();
@@ -251,6 +249,7 @@ impl crate::ffi::ConversationList {
                 let mut items: Vec<ConversationItem> = response
                     .conversations
                     .into_iter()
+                    .filter(is_visible_conversation)
                     .map(|convo| conversation_to_item(&convo))
                     .collect();
 
@@ -629,4 +628,8 @@ pub fn conversation_to_item(
         last_message_timestamp,
         last_message_time,
     }
+}
+
+fn is_visible_conversation(convo: &libgmessages_rs::proto::conversations::Conversation) -> bool {
+    convo.status == libgmessages_rs::proto::conversations::ConversationStatus::Active as i32
 }

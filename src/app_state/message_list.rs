@@ -998,7 +998,7 @@ impl crate::ffi::MessageList {
                         });
                     }
                 }
-                Err(error) => {
+                Err(_error) => {
                     let _ = qt_thread.queue(
                         move |mut qobject: core::pin::Pin<&mut ffi::MessageList>| {
                             qobject.as_mut().set_loading_more(false);

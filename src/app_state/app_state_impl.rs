@@ -32,7 +32,7 @@ impl Default for AppStateRust {
 }
 
 impl crate::ffi::AppState {
-    pub fn start_login(mut self: Pin<&mut Self>, remember_device: bool) {
+    pub fn start_login(mut self: Pin<&mut Self>, _remember_device: bool) {
         if *self.logged_in() || *self.login_in_progress() {
             return;
         }
@@ -65,15 +65,14 @@ impl crate::ffi::AppState {
                     let client = GMClient::new(auth);
                     let _ = client.fetch_config().await;
 
-                    let (qr_url, stream) =
-                        match client.start_qr_pairing_stream(remember_device).await {
-                            Ok(res) => res,
-                            Err(e) => {
-                                eprintln!("Failed to start QR pairing stream: {}", e);
-                                tokio::time::sleep(Duration::from_secs(2)).await;
-                                continue;
-                            }
-                        };
+                    let (qr_url, stream) = match client.start_qr_pairing_stream().await {
+                        Ok(res) => res,
+                        Err(e) => {
+                            eprintln!("Failed to start QR pairing stream: {}", e);
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            continue;
+                        }
+                    };
 
                     let qr_url_string = qr_url.to_string();
                     let svg_data_url =

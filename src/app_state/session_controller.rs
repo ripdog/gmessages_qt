@@ -1,10 +1,12 @@
 use crate::ffi;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use chrono::Utc;
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::QString;
 use futures_util::StreamExt;
+use prost::Message;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -60,9 +62,10 @@ impl crate::ffi::SessionController {
                     // starting a new long-poll stream (mirrors what
                     // mautrix-gmessages does to keep sessions alive).
                     match client.refresh_token_if_needed().await {
-                        Ok(true) => {
-                            // Token was refreshed — persist the new auth
-                            // data to disk so the session survives restarts.
+                        Ok(()) => {
+                            // The library now refreshes in-place and returns
+                            // only success/failure. Persist the auth snapshot
+                            // so any refreshed token survives restarts.
                             let store = libgmessages_rs::store::AuthDataStore::default_store();
                             let auth_handle = client.auth();
                             let auth = auth_handle.lock().await;
@@ -70,7 +73,6 @@ impl crate::ffi::SessionController {
                                 eprintln!("failed to save refreshed auth: {e}");
                             }
                         }
-                        Ok(false) => { /* token still valid */ }
                         Err(e) => {
                             eprintln!("token refresh failed: {e}");
                             // Continue anyway — the existing token may
@@ -83,24 +85,10 @@ impl crate::ffi::SessionController {
                         .await
                         .map_err(|e| e.to_string())?;
 
-                    // Fire-and-forget: tell the server this stream is active.
-                    // This MUST happen before any send_request calls (like
-                    // ListConversations) because the server won't route RPC
-                    // responses down the stream until it has seen GetUpdates.
-                    let gu_client = client.clone();
-                    let gu_session_id = handler.session_id().to_string();
-                    tokio::spawn(async move {
-                        let _ = gu_client
-                            .send_rpc_message_with_id_and_session_no_payload(
-                                libgmessages_rs::proto::rpc::ActionType::GetUpdates,
-                                libgmessages_rs::proto::rpc::MessageType::BugleMessage,
-                                &gu_session_id,
-                                &gu_session_id,
-                                true,
-                            )
-                            .await;
-                    });
-
+                    // Do NOT send GetUpdates here — it floods the stream
+                    // with historical events that block RPC responses for
+                    // 10+ seconds.  ListConversations loads first on a
+                    // clean stream, then GetUpdates is sent after load.
                     let _ =
                         session_thread.queue(|mut qobject: Pin<&mut ffi::SessionController>| {
                             qobject.as_mut().set_status(QString::from("Connected"));
@@ -216,7 +204,11 @@ pub async fn run_long_poll_loop(
     qt_thread: &CxxQtThread<ffi::SessionController>,
 ) -> Result<StreamEndReason, String> {
     let mut stream = std::pin::pin!(stream);
-    let mut skip_count: i32 = 0;
+    let settle_duration = Duration::from_secs(3);
+    let settle_timer = tokio::time::sleep(settle_duration);
+    tokio::pin!(settle_timer);
+    let mut catch_up_mode = true;
+    let recent_cutoff_micros = Utc::now().timestamp_micros() - Duration::from_secs(300).as_micros() as i64;
 
     // Also spawn the periodic GetUpdates heartbeat
     let heartbeat_stop = stop_flag.clone();
@@ -238,11 +230,6 @@ pub async fn run_long_poll_loop(
         }
     });
 
-    let mut settled = false;
-    let settle_duration = Duration::from_secs(3);
-    let settle_timer = tokio::time::sleep(settle_duration);
-    tokio::pin!(settle_timer);
-
     let result = loop {
         if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
             break Ok(StreamEndReason::Stopped);
@@ -250,16 +237,13 @@ pub async fn run_long_poll_loop(
 
         let item = tokio::select! {
             item = stream.next() => {
-                // Reset the settle timer every time we get data
-                if !settled {
+                if catch_up_mode {
                     settle_timer.as_mut().reset(tokio::time::Instant::now() + settle_duration);
                 }
                 item
             }
-            _ = &mut settle_timer, if !settled => {
-                // No events for 3 seconds — the initial burst is done
-                settled = true;
-                eprintln!("=== UPDATES SETTLED (3s of quiet) ===");
+            _ = &mut settle_timer, if catch_up_mode => {
+                catch_up_mode = false;
                 let _ = qt_thread.queue(|mut qobject: Pin<&mut ffi::SessionController>| {
                     qobject.as_mut().updates_settled();
                 });
@@ -278,27 +262,16 @@ pub async fn run_long_poll_loop(
             }
         };
 
-        if let Some(ack) = payload.ack.as_ref() {
-            if let Some(count) = ack.count {
-                skip_count = count;
-            }
-        }
         let Some(data) = payload.data.as_ref() else {
             continue;
         };
-        if skip_count > 0 {
-            // Only skip old payloads if there are no pending RPC requests.
-            // If a request is pending (e.g. ListConversations), its response
-            // might arrive during the skip window — we must process it.
-            let pending_len = handler.pending_len().await;
-            if pending_len == 0 {
-                skip_count -= 1;
-                continue;
-            }
-        }
         let _ = handler.process_payload(data).await;
 
         if data.bugle_route != libgmessages_rs::proto::rpc::BugleRoute::DataEvent as i32 {
+            continue;
+        }
+
+        if !is_update_event_payload(data) {
             continue;
         }
 
@@ -316,18 +289,29 @@ pub async fn run_long_poll_loop(
         };
 
         let Some(event) = updates.event else { continue };
+        let response_id = data.response_id.clone();
+
+        if catch_up_mode {
+            if !event_is_recent_enough(&event, recent_cutoff_micros) {
+                continue;
+            }
+            catch_up_mode = false;
+            let _ = qt_thread.queue(|mut qobject: Pin<&mut ffi::SessionController>| {
+                qobject.as_mut().updates_settled();
+            });
+        }
 
         match event {
             libgmessages_rs::proto::events::update_events::Event::MessageEvent(message_event) => {
+                if !response_id.is_empty() {
+                    let client = handler.client();
+                    tokio::spawn(async move {
+                        let _ = client.ack_messages(vec![response_id]).await;
+                    });
+                }
+
                 for message in message_event.data {
                     let body = extract_message_body(&message);
-
-                    eprintln!("\n=== NEW MESSAGE RECEIVED ===");
-                    eprintln!("Body empty?: {}", body.trim().is_empty());
-                    eprintln!("Timestamp parsed: {}", message.timestamp);
-                    eprintln!("{:#?}", message);
-                    eprintln!("============================\n");
-
                     let conversation_id = message.conversation_id.clone();
                     let participant_id = message.participant_id.clone();
                     let transport_type = message.r#type;
@@ -350,6 +334,17 @@ pub async fn run_long_poll_loop(
                             (String::new(), String::new(), String::new(), 0, 0)
                         };
 
+                    eprintln!(
+                        "message_event ts={} convo={} msg_id={} tmp_id={} chars={} media={} status={}",
+                        timestamp_micros,
+                        conversation_id,
+                        message_id,
+                        tmp_id,
+                        body.chars().count(),
+                        is_media,
+                        status_code,
+                    );
+
                     let _ =
                         qt_thread.queue(move |mut qobject: Pin<&mut ffi::SessionController>| {
                             qobject.as_mut().message_received(
@@ -369,14 +364,6 @@ pub async fn run_long_poll_loop(
                                 media_height,
                             );
                         });
-
-                    if !message.message_id.is_empty() {
-                        let client = handler.client();
-                        let ack_id = message.message_id.clone();
-                        tokio::spawn(async move {
-                            let _ = client.ack_messages(vec![ack_id]).await;
-                        });
-                    }
                 }
             }
             libgmessages_rs::proto::events::update_events::Event::ConversationEvent(
@@ -425,6 +412,42 @@ pub async fn run_long_poll_loop(
 
     heartbeat.abort();
     result
+}
+
+fn is_update_event_payload(data: &libgmessages_rs::proto::rpc::IncomingRpcMessage) -> bool {
+    let Ok(rpc_data) =
+        libgmessages_rs::proto::rpc::RpcMessageData::decode(data.message_data.as_slice())
+    else {
+        return false;
+    };
+
+    matches!(
+        libgmessages_rs::proto::rpc::ActionType::try_from(rpc_data.action),
+        Ok(libgmessages_rs::proto::rpc::ActionType::GetUpdates)
+            | Ok(libgmessages_rs::proto::rpc::ActionType::MessageUpdates)
+            | Ok(libgmessages_rs::proto::rpc::ActionType::ConversationUpdates)
+    )
+}
+
+fn event_is_recent_enough(
+    event: &libgmessages_rs::proto::events::update_events::Event,
+    cutoff_micros: i64,
+) -> bool {
+    match event {
+        libgmessages_rs::proto::events::update_events::Event::MessageEvent(message_event) => {
+            message_event
+                .data
+                .iter()
+                .any(|message| message.timestamp >= cutoff_micros)
+        }
+        libgmessages_rs::proto::events::update_events::Event::ConversationEvent(convo_event) => {
+            convo_event
+                .data
+                .iter()
+                .any(|convo| convo.last_message_timestamp >= cutoff_micros)
+        }
+        _ => false,
+    }
 }
 
 /// Extract text body from a Message, returning empty string if none.

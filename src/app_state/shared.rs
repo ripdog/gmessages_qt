@@ -1,4 +1,3 @@
-use base64::Engine;
 use libgmessages_rs::{gmclient::GMClient, store::AuthDataStore};
 use std::sync::OnceLock;
 
