@@ -1,6 +1,6 @@
 [package]
 name = "kourier"
-version = "0.3.0"
+version = "0.3.1"
 authors = [ "ripdog" ]
 edition = "2021"
 license = "BSD-2-Clause"

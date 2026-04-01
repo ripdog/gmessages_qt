@@ -424,7 +424,7 @@ Kirigami.ApplicationWindow {
                         boundsBehavior: Flickable.StopAtBounds
                         verticalLayoutDirection: ListView.BottomToTop
                         spacing: Kirigami.Units.mediumSpacing
-                        reuseItems: true
+                        reuseItems: false
                         visible: !root.messageListModel.loading && root.selectedConversationIndex >= 0
 
                         // ── Load-more state ──
